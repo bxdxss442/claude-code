@@ -21180,6 +21180,232 @@ resetArena();
 // Test-/Debug-Zugriff (z. B. aus der Browser-Konsole)
 window.__arena = {ANI, ANI_SHOTS, ANI_BASE, aniCutin, UltSeq, SA, SS_ARENAS, SA_META, saArenaFor, saHome, saHurt, BAL, BAL_TIER, BAL_GAIN, balInfo, balUltInfo, hlCareers, hlArch, snArchive, snNewSeason, snToggleFav, snFavs, snDialog, rvOf, rvHeat, rvFaceOff, RV_LV, mgShadowElephant, uxSwordsCopy, pzRoll, pzPairs, PZ_LIST, pzStart, imPlan, imScene, kdOpen, stMove, ST_KEYS, stLive, IM_ACTS, movePool, ultPool, allScore, scActor, removeRagdoll, V3, teleportRagdoll, ssRuinOn, MAPS, twScene, twArm, TW_INFO, TW_LIST, ssArena, twHdResult, ssWatch:(...a) => ssWatch(...a), ssSimulate:(...a) => ssSimulate(...a), ssResolve:(...a) => ssResolve(...a), ssPlayScene, scFarewell, scWcLineup, scWcIntro, scWcResult, scWcChampion, scWcDuelResult, scDoor, ssScenesFor, ssSimNext, addEntity, entities, IT, ITEMS, IT_IDS, ItemDrop, PETS, Pet, itGive, ULTC, UX_LIST, ultStart, NX_ULTS, DOMAIN_THEMES, domains, SS_POSES, upLv, SS, SS_CHEM, SS_REACTIONS, ssTeamReactions, ssStartReaction, ssRxLive, fxTick, ssFrame, scRevive, scPlace, MU, MU_TRACKS, muKey, AU, auNoiseBuf, XR, xrTick, blkClassOf, blkTag, BLK, SKIN_ITEMS, skinRoll, THREE, scene, ctx, ssPairReaction, ssNewTournament, ssElems, ssChem, SS_REACTIONS, endBattle:(w) => endBattle(w), camera, setModeHooks, spawnRagdoll, skinNames, ssSkinOf, SK_ON, blkKnow, resolveHit, ssContain, SSF, ssFighters, SS_PACE, SSC, scSkip, ssPlayScene, scIntro, scFarewell, scCut, scChampion, ssPlayIntro, ssOpen, ssWatch, ssStop, ssSimN, ssRender, ssRenameUi, ssCheck, ssNext, ssToLobby, ssSkipWatch, PKX:{pkStep, pkWall, pkStartSlide, pkStartRoll, pkWallJump, pkState}, Mind, MIND:{LEARN_PROFILES, AI_SKILL, ACT_LOG, getMT:() => MT, tokenOf}, AU, AV, SND, sfx, MAV, avRelevant, hitSpark, npcs, FINISHERS, legoBreak, startAirCombo, EPIC, EPIC_SEQ, startEpic, enactRule, CG_RULES, considerRule, domains, openDomain, cam, startPlea, mapSolidAt, makeMixKit, rollFullMix, NX_MOVES, NX_ULTS, killcam, mapState, breakProp, CAMP, openCampaign, campStartMission, campBeginFight, MISSIONS, bus, makeAlliance, CG, cgStart, cgStop, metro, STATIONS, aiTalk, spawnCurse, removeRagdoll, loadMap, MAP, ragdolls, get player(){ return player; }, ctx, battle, startBattle, resetArena, physicsStep, CHARACTERS, ATTACKS, entities, arena, mood, summonGuardian, startVoid, fx:{blackFlashFx, spawnSfx, spawnHitFx, spawnSlash, playCutscene, spawnLightning}, tick:(n) => { for(let i = 0; i < n; i++) physicsStep(); }};
 bus.emit('log', 'Phase 6: choose map, mode and character in the panel · Call Games and 2nd Selection at the top');
+
+/* ================= Character Creator (v57) ================= */
+// Eigene Kämpfer für die Second Selection: Name, Körperbasis, Ego-Typ, Rolle, fünf Werte, drei Techniken + Ultimate,
+// Aussehen (Farben, Extras, Skins), Fluchgegenstände und Begleiter. Gespeichert wird im Favoriten-Format (snSnapshot),
+// damit Neue Saison, Ruhmeshalle und Kader die Figuren ohne Sonderfälle kennen. „Einfügen“ ersetzt einen Kämpfer des laufenden Turniers.
+const CC_EXTRAS = [['pompadour', 'Pompadour'], ['longhair', 'Long hair'], ['scarf', 'Scarf'], ['wraps', 'Arm wraps'], ['pads', 'Shoulder pads'], ['hood', 'Hood'], ['spikes', 'Spikes'], ['coat', 'Coat'], ['bald', 'Bald']];
+const CC_TONES = ['#f4d6bc', '#f1c9a5', '#e8bf9a', '#e2b48c', '#d9a77c', '#c48a5f', '#8d5a3b'];
+const CC = {d:null, key:null, fair:true};
+function ccRole(moves){ const info = moves.map(ssMoveInfo), nR = info.filter(x => x.ranged).length, nC = info.filter(x => x.control).length; return nR >= 2 ? 'ranged' : nC >= 2 ? 'control' : nR > nC ? 'ranged' : nC > nR ? 'control' : 'melee'; }
+function ccPools(){ const E = ssEnv(); return {moves:E.movePool, ults:E.ultPool}; }
+function ccBlank(){
+  const P = ccPools(), pick = (a) => a[Math.floor(Math.random()*a.length)], easy = P.moves.filter(id => stMove(id, false).th === 0), moves = [];
+  while(moves.length < 3){ const m = pick(easy.length >= 3 ? easy : P.moves); if(!moves.includes(m)) moves.push(m); }
+  return {name:'New Fighter', base:CHAR_ORDER[0], ego:'egoist', roleMode:'auto', moves, ult:pick(P.ults.filter(u => stMove(u, true).th <= 50)) || P.ults[0],
+    spd:60, str:60, res:60, ce:60, iq:60, look:{jacket:'#141a2e', sleeve:'#141a2e', pants:'#0e1222', boots:'#07080f', skin:'#f1c9a5', hair:'#16121d', accent:'#e8323c', eyes:'#0e1222'},
+    extras:[], skinMode:'custom', skin:skinRoll(Math.random), items:[], pet:null};
+}
+function ccFromSnap(s){
+  const d = ccBlank();
+  Object.assign(d, {name:s.name, base:CHAR_ORDER.includes(s.base) ? s.base : d.base, ego:SS_EGO[s.ego] ? s.ego : d.ego, roleMode:s.roleMode || 'auto', moves:[...s.moves], ult:s.ult,
+    look:Object.assign({}, d.look, s.look || {}), extras:[...(s.extras || [])], skinMode:s.skin ? 'custom' : 'random', skin:s.skin ? JSON.parse(JSON.stringify(s.skin)) : d.skin, items:[...(s.items || [])], pet:s.pet || null});
+  for(const k of ST_KEYS) d[k] = s[k] ?? 60;
+  return d;
+}
+function ccIssues(d){
+  const out = [];
+  if(!d.name.trim()) out.push('Give the fighter a name.');
+  if(new Set(d.moves).size < 3) out.push('Pick three different techniques.');
+  if(CC.fair){ for(const id of d.moves){ const M = stMove(id, false); if((d[M.stat] || 0) < M.th) out.push(`${kdLabel(id)} needs ${ST_INFO[M.stat].short} ${M.th} (has ${d[M.stat]}).`); }
+    const U = stMove(d.ult, true); if((d[U.stat] || 0) < U.th) out.push(`Ultimate ${kdLabel(d.ult)} needs ${ST_INFO[U.stat].short} ${U.th} (has ${d[U.stat]}).`); }
+  const st = SS.st; if(st && st.players.some(p => p.orig === d.name.trim() && p.favKey !== CC.key)) out.push(`Another fighter in the tournament is already called “${d.name.trim()}”.`);
+  return out;
+}
+function ccToSnap(d, old){
+  const v = {}; for(const k of ST_KEYS) v[k] = stClamp(d[k]);
+  const ovr = Math.round(stOvrRaw(v)), name = d.name.trim().slice(0, 28);
+  return {orig:name, name, base:d.base, moves:[...d.moves], ult:d.ult, role:d.roleMode === 'auto' ? ccRole(d.moves) : d.roleMode, roleMode:d.roleMode, ego:d.ego,
+    look:Object.assign({}, d.look), extras:[...d.extras], ...v, spec:stTop(v)[0], skin:d.skinMode === 'custom' ? JSON.parse(JSON.stringify(d.skin)) : null,
+    items:[...d.items].slice(0, IT.max), pet:d.pet || null, bk:(old && old.bk) || {}, learned:(old && old.learned) || [], titles:(old && old.titles && old.titles.length) ? old.titles : ['🛠 Custom'],
+    flags:(old && old.flags) || [], career:(old && old.career) || {seasons:0, wins:0, losses:0, kos:0}, uid:(old && old.uid) || `cc#${Date.now().toString(36)}${Math.floor(Math.random()*1e4).toString(36)}`,
+    from:old && old.from && old.from.season ? Object.assign({}, old.from, {ovr}) : {season:0, ovr}, custom:true, savedAt:Date.now()};
+}
+// Ersten Auftritt nicht zur Mitte ziehen – eigene Werte sollen so ankommen, wie man sie gebaut hat
+const _ccApply = snApply;
+snApply = function(st, p, s, regress){ _ccApply(st, p, s, regress && !(s.custom && (!s.from || !s.from.season))); if(s.custom){ p.custom = true; p.roleMode = s.roleMode; } };
+// In das laufende Turnier einsetzen (ersetzt Kämpfer pid; Team, Status und Bilanz des Platzes bleiben)
+function ccInsert(key, pid, sync){
+  const st = SS.st, s = snFavs()[key], p = st && st.players[pid]; if(!s || !p) return;
+  if(sync){ const keep = {sx:p.sx, hist:p.hist, veteran:p.veteran}; snApply(st, p, s, false); Object.assign(p, keep); p.favKey = key; delete CHARACTERS['ss_' + p.id]; ssSkinOf(p); ssSave(); return; }
+  for(const q of st.players) if(q.favKey === key && q !== p) q.favKey = null;
+  const prev = p.name;
+  snApply(st, p, s, false); p.favKey = key; p.veteran = !!(s.from && s.from.season);
+  for(const id of p.items || []) for(const q of st.players) if(q !== p && q.items && q.items.includes(id)) q.items = q.items.filter(x => x !== id);
+  p.sx = [{seq:st.seq, d:{}, why:'Created in the Character Creator', tag:'season'}];
+  p.hist = [`${p.name} takes ${prev}'s place (Character Creator)`];
+  delete CHARACTERS['ss_' + p.id]; ssSkinOf(p); if(typeof ssPetOf === 'function') ssPetOf(p);
+  ssLog(st, `${p.name} joins the Second Selection in place of ${prev}.`); ssSave();
+}
+// Live-Kopie eines Favoriten im Turnier mitziehen (sonst überschreibt der Favoriten-Abgleich die Änderungen)
+function ccSyncLive(key){ const st = SS.st; if(!st) return; const p = st.players.find(q => q.favKey === key); if(p) ccInsert(key, p.id, true); }
+// Favoriten-Abgleich soll die Creator-Kennzeichnung nicht verlieren
+const _ccSnap = snSnapshot;
+snSnapshot = function(st, p){ const s = _ccSnap(st, p); if(p.custom){ s.custom = true; s.roleMode = p.roleMode; } return s; };
+
+(function(){ const st = document.createElement('style'); st.textContent = `
+#cc-modal{position:fixed;inset:0;z-index:75;background:rgba(10,10,16,.62);display:flex;align-items:center;justify-content:center;padding:14px}
+#cc-modal[hidden]{display:none}
+.cc-m{width:min(1120px,100%);max-height:calc(100vh - 28px);overflow-y:auto;background:var(--panel);color:var(--ink);border:3px solid var(--ink);box-shadow:8px 8px 0 var(--ink);display:grid;grid-template-columns:300px 1fr}
+.cc-l{padding:12px;border-right:3px solid var(--ink);background:#fff;display:flex;flex-direction:column;gap:8px}
+.cc-r{padding:12px 14px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.cc-m label{display:flex;flex-direction:column;gap:3px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.cc-m input[type=text],.cc-m select{font:700 13px var(--f-body);padding:5px 7px;border:2px solid var(--ink);background:#fff;color:var(--ink);text-transform:none;letter-spacing:0;color-scheme:light;min-width:0}
+.cc-m input[type=color]{width:100%;height:28px;border:2px solid var(--ink);padding:0;background:#fff}
+.cc-g2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.cc-g4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.cc-st{display:grid;grid-template-columns:42px 1fr 34px;gap:8px;align-items:center;font:700 12px var(--f-mono)}
+.cc-m .cc-st input[type=range]{width:100%;accent-color:var(--c)!important}
+.cc-st small{grid-column:1/4;font:500 11px var(--f-body);color:#666;margin-top:-4px}
+.cc-mv{display:grid;grid-template-columns:22px 1fr;gap:6px;align-items:start}
+.cc-mv>b{font:700 12px var(--f-mono);padding-top:6px}
+.cc-mi{font-size:11px;color:#555;margin-top:2px}.cc-mi.bad{color:#c4313c;font-weight:700}
+.cc-chk{display:flex!important;flex-direction:row!important;flex-wrap:wrap;gap:4px 10px;text-transform:none!important;letter-spacing:0!important}
+.cc-chk span{display:inline-flex;gap:4px;align-items:center;font:700 12px var(--f-body);color:var(--ink)}
+.cc-issues{margin:0;padding:6px 10px 6px 24px;background:#fff3c4;border:2px solid var(--ink);font-size:12px;font-weight:700}
+.cc-issues:empty{display:none}
+.cc-foot{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:flex-end;border-top:2px solid var(--ink);padding-top:10px}
+.cc-foot select{max-width:280px}
+@media (max-width:820px){.cc-m{grid-template-columns:1fr}.cc-l{border-right:0;border-bottom:3px solid var(--ink)}.cc-g4{grid-template-columns:1fr 1fr}}
+`; document.head.appendChild(st); const md = document.createElement('div'); md.id = 'cc-modal'; md.hidden = true; document.body.appendChild(md); })();
+
+function ccOpen(key){
+  const F = snFavs(); CC.key = key && F[key] ? key : null; CC.d = CC.key ? ccFromSnap(F[CC.key]) : ccBlank();
+  ccRender(); document.getElementById('cc-modal').hidden = false;
+}
+function ccClose(){ const md = document.getElementById('cc-modal'); md.hidden = true; md.innerHTML = ''; }
+function ccMoveOpts(pool, ult, sel){
+  const by = {}; for(const id of pool){ const M = stMove(id, ult); (by[M.stat] = by[M.stat] || []).push([id, M]); }
+  return ST_KEYS.filter(k => by[k]).map(k => `<optgroup label="${ST_INFO[k].label}">${by[k].sort((a, b) => a[1].pow - b[1].pow || kdLabel(a[0]).localeCompare(kdLabel(b[0])))
+    .map(([id, M]) => `<option value="${id}"${id === sel ? ' selected' : ''}>${kdEsc(kdLabel(id))} · ${'★'.repeat(M.tier)}${M.th ? ` · from ${M.th}` : ''}</option>`).join('')}</optgroup>`).join('');
+}
+function ccMoveInfo(id, ult){
+  const d = CC.d, M = stMove(id, ult), els = ssMoveElems(id).map(e => SS_ELEM[e] ? SS_ELEM[e].label : e).join(', '), B = typeof balInfo === 'function' && !ult ? balInfo(id) : null;
+  const bad = (d[M.stat] || 0) < M.th;
+  return `<div class="cc-mi${bad ? ' bad' : ''}">${ST_INFO[M.stat].short} ${'★'.repeat(M.tier)} · ${els}${B ? ` · ${B.cost} CE · ${B.cd.toFixed(1)} s` : ult ? ' · 100 CE' : ''}${M.th ? ` · needs ${ST_INFO[M.stat].short} ${M.th}${bad ? ` (has ${d[M.stat]})` : ''}` : ''}</div>`;
+}
+function ccSkinRow(cat, k, label){
+  const S = CC.d.skin, e = S[k] || [0, '#ffffff', '#1d1b26'];
+  return `<label>${label}<select data-sk="${k}">${SKIN_ITEMS[cat].map((it, i) => `<option value="${i}"${i === e[0] ? ' selected' : ''}>${kdEsc(it.n)}</option>`).join('')}</select>
+    <span class="cc-g2"><input type="color" data-skc="${k}:1" value="${e[1]}"><input type="color" data-skc="${k}:2" value="${e[2]}"></span></label>`;
+}
+function ccSummary(){
+  const d = CC.d, v = {}; for(const k of ST_KEYS) v[k] = d[k];
+  const ovr = Math.round(stOvrRaw(v)), role = d.roleMode === 'auto' ? ccRole(d.moves) : d.roleMode, top = stTop(v)[0], base = CHARACTERS[d.base];
+  return `<div class="kd-mh"><h3>${kdEsc(d.name || '—')}</h3><span class="kd-ovr">${ovr}</span></div>
+    <div class="kd-meta"><span>${SS_ROLES[role]} · ${SS_EGO[d.ego].label}</span><span>Specialty: ${ST_INFO[top].label}</span><span>Body: ${kdEsc(base ? base.name : d.base)}</span></div>
+    <div style="align-self:center">${kdRadar([{v, col:'#121019', fill:'rgba(18,16,25,0.12)', dots:true}], 220)}</div>
+    <div class="kd-cf" style="padding:0">${d.moves.map(id => kdMoveChip(id, false)).join('')}${kdMoveChip(d.ult, true)}</div>
+    <div class="hint" style="font-size:11px">${SS_EGO[d.ego].desc}.</div>`;
+}
+function ccRefresh(){
+  const md = document.getElementById('cc-modal'); if(!md || md.hidden) return; const d = CC.d;
+  md.querySelector('#cc-sum').innerHTML = ccSummary();
+  for(const k of ST_KEYS){ const o = md.querySelector(`[data-sto="${k}"]`); if(o) o.textContent = d[k]; }
+  md.querySelectorAll('[data-mvi]').forEach(el => { const i = el.dataset.mvi; el.innerHTML = i === 'u' ? ccMoveInfo(d.ult, true) : ccMoveInfo(d.moves[+i], false); });
+  const L = ccIssues(d); md.querySelector('#cc-issues').innerHTML = L.map(x => `<li>${kdEsc(x)}</li>`).join('');
+  const roleSel = md.querySelector('#cc-role'); if(roleSel) roleSel.options[0].textContent = `Auto (${SS_ROLES[ccRole(d.moves)]})`;
+}
+function ccRender(){
+  const md = document.getElementById('cc-modal'), d = CC.d, P = ccPools(), st = SS.st, F = snFavs();
+  const linked = st && CC.key ? st.players.find(p => p.favKey === CC.key) : null;
+  const targets = st ? [...st.players].filter(p => p.status !== 'eliminated' && p !== linked).sort((a, b) => (a.favKey ? 1 : 0) - (b.favKey ? 1 : 0) || a.ovr - b.ovr) : [];
+  const tName = (p) => `${p.name} (${p.ovr})${p.team != null && st.teams[p.team] ? ' · ' + st.teams[p.team].name : ''}${p.favKey ? ' · ⭐' : ''}`;
+  md.innerHTML = `<div class="cc-m" role="dialog" aria-label="Character Creator">
+  <div class="cc-l" id="cc-sum">${ccSummary()}</div>
+  <div class="cc-r">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div class="kd-h4" style="flex:1;margin:0">🛠 Character Creator${CC.key ? ' · editing favorite' : ''}</div><button class="b" id="cc-x">Close ✕</button></div>
+    <div class="cc-g2">
+      <label>Name<input type="text" id="cc-name" maxlength="28" value="${kdEsc(d.name)}"></label>
+      <label>Body / base style<select id="cc-base">${CHAR_ORDER.map(c => `<option value="${c}"${c === d.base ? ' selected' : ''}>${kdEsc(CHARACTERS[c].name)} – ${kdEsc(CHARACTERS[c].role || '')}</option>`).join('')}</select></label>
+      <label>Ego type (personality)<select id="cc-ego">${SS_EGO_KEYS.map(k => `<option value="${k}"${k === d.ego ? ' selected' : ''}>${SS_EGO[k].label} – ${kdEsc(SS_EGO[k].desc)}</option>`).join('')}</select></label>
+      <label>Role<select id="cc-role"><option value="auto"${d.roleMode === 'auto' ? ' selected' : ''}>Auto</option>${Object.entries(SS_ROLES).map(([k, n]) => `<option value="${k}"${d.roleMode === k ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
+    </div>
+    <div><div class="kd-h4">Stats</div>${ST_KEYS.map(k => `<div class="cc-st" style="--c:${ST_INFO[k].col}"><span>${ST_INFO[k].short}</span><input type="range" min="1" max="99" value="${d[k]}" data-st="${k}"><b data-sto="${k}">${d[k]}</b><small>${ST_INFO[k].label} – ${kdEsc(ST_INFO[k].desc)}</small></div>`).join('')}
+      <div style="display:flex;gap:6px;margin-top:6px"><button class="b" id="cc-st-bal">Balanced 60</button><button class="b" id="cc-st-rnd">Random</button><button class="b" id="cc-st-fit">Meet move thresholds</button></div></div>
+    <div><div class="kd-h4">Techniques</div>
+      ${[0, 1, 2].map(i => `<div class="cc-mv"><b>${i + 1}</b><div><select data-mv="${i}" style="width:100%">${ccMoveOpts(P.moves, false, d.moves[i])}</select><div data-mvi="${i}"></div></div></div>`).join('')}
+      <div class="cc-mv"><b>◆</b><div><select id="cc-ult" style="width:100%">${ccMoveOpts(P.ults, true, d.ult)}</select><div data-mvi="u"></div></div></div>
+      <label class="cc-chk" style="margin-top:6px"><span><input type="checkbox" id="cc-fair"${CC.fair ? ' checked' : ''}> Fair mode: techniques must meet their stat threshold</span></label></div>
+    <div><div class="kd-h4">Look</div>
+      <div class="cc-g4"><label>Skin tone<select id="cc-tone">${CC_TONES.map(c => `<option value="${c}"${c === d.look.skin ? ' selected' : ''} style="background:${c}">${c}</option>`).join('')}</select></label>
+        <label>Hair<input type="color" data-lk="hair" value="${d.look.hair}"></label><label>Accent<input type="color" data-lk="accent" value="${d.look.accent}"></label><label>Eyes<input type="color" data-lk="eyes" value="${d.look.eyes}"></label></div>
+      <label class="cc-chk" style="margin-top:6px">${CC_EXTRAS.map(([k, n]) => `<span><input type="checkbox" data-ex="${k}"${d.extras.includes(k) ? ' checked' : ''}> ${n}</span>`).join('')}</label>
+      <div class="hint" style="font-size:11px">With skins enabled only “Bald” and “Arm wraps” are shown – the skin pieces below replace the rest.</div>
+      <label style="margin-top:6px">Skins<select id="cc-skmode"><option value="custom"${d.skinMode === 'custom' ? ' selected' : ''}>Chosen by hand</option><option value="random"${d.skinMode === 'random' ? ' selected' : ''}>Random each tournament</option></select></label>
+      <div class="cc-g4" id="cc-skins" ${d.skinMode === 'custom' ? '' : 'hidden'} style="margin-top:6px">${SK_CATS.map(([cat, k, n]) => ccSkinRow(cat, k, n)).join('')}</div>
+      ${d.skinMode === 'custom' ? `<label style="max-width:140px;margin-top:6px">Skin hair color<input type="color" id="cc-hc" value="${d.skin.hc}"></label>` : ''}</div>
+    <div class="cc-g2"><div><div class="kd-h4">Cursed items (max ${IT.max})</div><label class="cc-chk">${IT_IDS.map(id => `<span title="${kdEsc(ITEMS[id].d)}"><input type="checkbox" data-it="${id}"${d.items.includes(id) ? ' checked' : ''}> ${ITEMS[id].k} ${kdEsc(ITEMS[id].n)}</span>`).join('')}</label></div>
+      <div><div class="kd-h4">Companion</div><select id="cc-pet" style="width:100%"><option value="">None</option>${PET_IDS.map(id => `<option value="${id}"${id === d.pet ? ' selected' : ''}>${PETS[id].k} ${kdEsc(PETS[id].n)}</option>`).join('')}</select>
+        <div class="hint" style="font-size:11px;margin-top:4px">${d.pet ? kdEsc(PETS[d.pet].d) : 'Most fighters have no companion.'}</div></div></div>
+    <ul class="cc-issues" id="cc-issues"></ul>
+    <div class="cc-foot">
+      ${CC.key ? '<button class="b" id="cc-del">Delete</button>' : ''}<button class="b" id="cc-new">New blank</button>
+      <span style="flex:1"></span>
+      ${linked ? `<span class="hint">In the tournament as ${kdEsc(linked.name)} – saving updates it there.</span>` : ''}
+      <button class="b" id="cc-save">⭐ Save to favorites</button>
+      ${st && !linked && targets.length ? `<select id="cc-tgt" aria-label="Fighter to replace">${targets.map(p => `<option value="${p.id}">replace ${kdEsc(tName(p))}</option>`).join('')}</select><button class="b hot" id="cc-ins">Save &amp; insert into tournament</button>` : ''}
+    </div>
+  </div></div>`;
+  const $q = (s) => md.querySelector(s), upd = () => ccRefresh();
+  $q('#cc-x').onclick = ccClose; md.onclick = (e) => { if(e.target === md) ccClose(); };
+  $q('#cc-name').oninput = (e) => { d.name = e.target.value; upd(); };
+  $q('#cc-base').onchange = (e) => { d.base = e.target.value; upd(); };
+  $q('#cc-ego').onchange = (e) => { d.ego = e.target.value; upd(); };
+  $q('#cc-role').onchange = (e) => { d.roleMode = e.target.value; upd(); };
+  md.querySelectorAll('[data-st]').forEach(el => el.oninput = () => { d[el.dataset.st] = +el.value; upd(); });
+  const setStats = (f) => { for(const k of ST_KEYS) d[k] = stClamp(f(k)); ccRender(); };
+  $q('#cc-st-bal').onclick = () => setStats(() => 60);
+  $q('#cc-st-rnd').onclick = () => setStats(() => 35 + Math.random()*55);
+  $q('#cc-st-fit').onclick = () => { for(const [id, u] of [...d.moves.map(m => [m, false]), [d.ult, true]]){ const M = stMove(id, u); d[M.stat] = Math.max(d[M.stat], M.th); } ccRender(); };
+  md.querySelectorAll('[data-mv]').forEach(el => el.onchange = () => { d.moves[+el.dataset.mv] = el.value; upd(); });
+  $q('#cc-ult').onchange = (e) => { d.ult = e.target.value; upd(); };
+  $q('#cc-fair').onchange = (e) => { CC.fair = e.target.checked; upd(); };
+  $q('#cc-tone').onchange = (e) => { d.look.skin = e.target.value; };
+  md.querySelectorAll('[data-lk]').forEach(el => el.oninput = () => { d.look[el.dataset.lk] = el.value; });
+  md.querySelectorAll('[data-ex]').forEach(el => el.onchange = () => { const k = el.dataset.ex; d.extras = d.extras.filter(x => x !== k); if(el.checked) d.extras.push(k); });
+  $q('#cc-skmode').onchange = (e) => { d.skinMode = e.target.value; ccRender(); };
+  md.querySelectorAll('[data-sk]').forEach(el => el.onchange = () => { const k = el.dataset.sk; d.skin[k] = d.skin[k] || [0, '#ffffff', '#1d1b26']; d.skin[k][0] = +el.value; });
+  md.querySelectorAll('[data-skc]').forEach(el => el.oninput = () => { const [k, i] = el.dataset.skc.split(':'); d.skin[k] = d.skin[k] || [0, '#ffffff', '#1d1b26']; d.skin[k][+i] = el.value; });
+  if($q('#cc-hc')) $q('#cc-hc').oninput = (e) => { d.skin.hc = e.target.value; };
+  md.querySelectorAll('[data-it]').forEach(el => el.onchange = () => { const id = el.dataset.it; d.items = d.items.filter(x => x !== id); if(el.checked){ d.items.push(id); while(d.items.length > IT.max){ const old = d.items.shift(); const o = md.querySelector(`[data-it="${old}"]`); if(o) o.checked = false; } } });
+  $q('#cc-pet').onchange = (e) => { d.pet = e.target.value || null; ccRender(); };
+  $q('#cc-new').onclick = () => { CC.key = null; CC.d = ccBlank(); ccRender(); };
+  if($q('#cc-del')) $q('#cc-del').onclick = () => { const b = $q('#cc-del'); if(b.dataset.arm !== '1'){ b.dataset.arm = '1'; b.textContent = 'Really delete?'; return; }
+    const F2 = snFavs(); delete F2[CC.key]; snFavSave(F2); if(SS.st) for(const p of SS.st.players) if(p.favKey === CC.key) p.favKey = null; ccClose(); ssRender(); };
+  const save = () => { const L = ccIssues(d); if(L.length){ ccRefresh(); md.querySelector('#cc-issues').scrollIntoView({block:'nearest'}); return null; }
+    const F2 = snFavs(), s = ccToSnap(d, CC.key ? F2[CC.key] : null), key = CC.key || s.uid; F2[key] = s; snFavSave(F2); CC.key = key; ccSyncLive(key); return key; };
+  $q('#cc-save').onclick = () => { if(save()){ ccClose(); if(SS.kd) SS.kd.view = 'favs'; SS.tab = 'squad'; ssRender(); } };
+  if($q('#cc-ins')) $q('#cc-ins').onclick = () => { const key = save(); if(!key) return; ccInsert(key, +$q('#cc-tgt').value); ccClose(); if(SS.kd) SS.kd.view = 'cards'; SS.tab = 'squad'; ssRender(); };
+  ccRefresh();
+}
+// Einstiege: Button in der Turnier-Leiste, in der Favoriten-Ansicht und im Kämpfer-Detail
+(function(){ const b = document.createElement('button'); b.className = 'b'; b.id = 'ss-creator'; b.textContent = '🛠 Character Creator'; b.title = 'Build your own fighters, save them as favorites and insert them into the tournament';
+  const ref = document.getElementById('ss-season') || document.getElementById('ss-new'); if(ref) ref.after(b); b.onclick = () => ccOpen(null); })();
+const _ccKader = ssKaderRender;
+ssKaderRender = function(body){
+  _ccKader(body);
+  if(SS.kd && SS.kd.view === 'favs'){
+    const bar = body.querySelector('.kd-bar'); if(bar && !bar.querySelector('#cc-newfav')){ const b = document.createElement('button'); b.className = 'b hot'; b.id = 'cc-newfav'; b.textContent = '🛠 New character'; b.onclick = () => ccOpen(null); bar.appendChild(b); }
+    const F = snFavs();
+    for(const u of body.querySelectorAll('[data-unfav]')){ const k = u.dataset.unfav, cf = u.parentElement;
+      const e = document.createElement('button'); e.className = 'b'; e.textContent = '🛠 Edit'; e.onclick = () => ccOpen(k); cf.prepend(e);
+      const st = SS.st, live = st && st.players.find(p => p.favKey === k);
+      if(st && !live){ const i = document.createElement('button'); i.className = 'b'; i.textContent = 'Insert'; i.title = 'Open in the creator to choose who it replaces'; i.onclick = () => ccOpen(k); cf.prepend(i); }
+      else if(live){ const s = document.createElement('span'); s.className = 'hint'; s.style.fontSize = '11px'; s.textContent = `in tournament as ${live.name}`; cf.appendChild(s); }
+      if(F[k] && F[k].custom){ const card = u.closest('.kd-card'), tag = card && card.querySelector('.kd-tag'); if(tag) tag.textContent = '🛠'; }
+    }
+  }
+};
+const _ccOpenKd = kdOpen;
+kdOpen = function(id, cmpId){
+  _ccOpenKd(id, cmpId);
+  const st = SS.st, p = st.players[id], md = document.getElementById('kd-modal'), h = md && md.querySelector('.kd-mh'); if(!h) return;
+  const b = document.createElement('button'); b.className = 'b'; b.textContent = '🛠 Edit in Creator'; b.title = p.favKey ? 'Edit this favorite' : 'Saves this fighter as a favorite and opens it in the creator';
+  b.onclick = () => { if(!p.favKey) snToggleFav(id); const k = st.players[id].favKey; kdClose(); ccOpen(k); };
+  h.after(b);
+};
+
 requestAnimationFrame(frame);
 } // startGame
 </script>
