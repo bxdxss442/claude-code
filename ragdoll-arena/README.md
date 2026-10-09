@@ -29,7 +29,7 @@ Turniers, über „Neue Saison“ lassen sich die Figuren ebenfalls importieren.
   - **The pick is announced.** A scene shows "You chose …", followed by either "The rest of the losers team will fall back a stage." or "This means that … will no longer participate in this tournament. LOCK OFF!".
 - **🎞 Cutscene Gallery**: Every tournament cutscene is saved together with the tournament state (IndexedDB), so it replays exactly as it first played. You can delete single scenes or reset the whole gallery.
 - **↻ Repeat fight** (option in the settings): Rewinds the tournament to before the last match so you can fight it again. It is offered on the result card, in the overview, on the pick screen, and as "↻ Restart" during a fight.
-- **Wildcard farewell**: Eliminated fighters walk down a corridor with two doors, EXIT and WILDCARD. The scene cuts away before you see which door they take.
+- **Wildcard farewell**: Short (about 6 s) and identical for everyone. The fighter stands at a fork like in the manga: slatted corridors branch off, with the pentagon wildcard door on the left and the EXIT door on the right. He looks left and right, then the screen goes black, and he never takes a step in either direction.
 
 ## Gacha Reveal (Character Creator)
 

@@ -21652,64 +21652,91 @@ function scCmVerdict(m){
 }
 
 /* ---------- Wildcard-Abschied: Gang mit zwei Türen, welche er nimmt, bleibt offen ---------- */
-function cmCorridor(exitLeft){
-  // Lambert statt Toon: der Toon-Randlichteffekt färbt flach angeschaute Böden und Decken lila
-  const lam = (c) => new THREE.MeshLambertMaterial({color:c});
-  const g = new THREE.Group(), wall = lam('#262d3d'), flo = lam('#14171f'), metal = lam('#363c4a'), Z0 = -3.4, Z1 = 13, HW = 2.3, H = 3.6, mid = (Z0 + Z1)/2, len = Z1 - Z0;
-  const mats = [wall, flo, metal], geos = [];
-  const box = (mat, sx, sy, sz, x, y, z) => { const m = new THREE.Mesh(GEO.box, mat); m.scale.set(sx, sy, sz); m.position.set(x, y, z); g.add(m); return m; };
-  box(flo, 2*HW, 0.02, len, 0, 0.01, mid);
-  for(const s of [-1, 1]) box(wall, 0.25, H, len, s*(HW + 0.12), H/2, mid);
-  box(wall, 2*HW + 0.5, 0.25, len, 0, H + 0.12, mid); box(wall, 2*HW, H, 0.25, 0, H/2, Z0);
-  // Stirnwand mit zwei Türöffnungen (x = ±1.1, 1.3 breit, 2.5 hoch)
-  const DW = 1.3, DH = 2.5, DX = 1.1;
-  box(wall, HW - DX - DW/2, H, 0.25, -(HW + DX + DW/2)/2, H/2, Z1); box(wall, HW - DX - DW/2, H, 0.25, (HW + DX + DW/2)/2, H/2, Z1);
-  box(wall, 2*(DX - DW/2), H, 0.25, 0, H/2, Z1); box(wall, 2*HW, H - DH, 0.25, 0, DH + (H - DH)/2, Z1);
-  const lights = [], strips = [];
-  const glow = (col, o) => { const m = new THREE.MeshBasicMaterial({color:col, transparent:true, opacity:o, toneMapped:false}); mats.push(m); return m; };
-  for(let z = Z0 + 1.6; z < Z1 - 0.6; z += 2.4){ const m = new THREE.Mesh(GEO.box, glow('#dfe9ff', 0.95)); m.scale.set(0.9, 0.03, 0.22); m.position.set(0, H - 0.02, z); g.add(m); lights.push(m); }
-  for(const s of [-1, 1]){ const m = new THREE.Mesh(GEO.box, glow('#2fc4e0', 0.6)); m.scale.set(0.04, 0.03, len - 0.6); m.position.set(s*(HW - 0.05), 0.04, mid); g.add(m); strips.push(m); }
-  const sign = (text, sub, col, x) => {
-    const cv = document.createElement('canvas'); cv.width = 512; cv.height = 160; const c = cv.getContext('2d');
-    c.fillStyle = '#05070b'; c.fillRect(0, 0, 512, 160); c.strokeStyle = col; c.lineWidth = 8; c.strokeRect(6, 6, 500, 148);
-    c.fillStyle = col; c.textAlign = 'center'; c.textBaseline = 'middle'; c.font = 'bold 70px "Dela Gothic One",sans-serif'; c.fillText(text, 256, 66); c.font = 'bold 30px sans-serif'; c.fillText(sub, 256, 128);
-    const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; const mat = new THREE.MeshBasicMaterial({map:tex, toneMapped:false}); mats.push(mat); geos.push(tex);
-    const pl = new THREE.Mesh(new THREE.PlaneGeometry(1.25, 0.39), mat); geos.push(pl.geometry); pl.position.set(x, DH + 0.42, Z1 - 0.14); pl.rotation.y = Math.PI; g.add(pl);
-    // Tür: dunkles Blatt mit Leuchtrahmen in Schildfarbe
-    const leaf = new THREE.Mesh(GEO.box, metal); leaf.scale.set(DW - 0.04, DH - 0.02, 0.08); leaf.position.set(x, DH/2, Z1 + 0.04); g.add(leaf);
-    const knob = new THREE.Mesh(GEO.box, glow('#c9d0dc', 1)); knob.scale.set(0.06, 0.18, 0.06); knob.position.set(x + (x < 0 ? 0.45 : -0.45), 1.05, Z1 - 0.02); g.add(knob);
-    const fr = glow(col, 0.85); for(const [sx, sy, px, py] of [[0.05, DH, x - DW/2, DH/2], [0.05, DH, x + DW/2, DH/2], [DW, 0.05, x, DH]]){ const m = new THREE.Mesh(GEO.box, fr); m.scale.set(sx, sy, 0.04); m.position.set(px, py, Z1 - 0.13); g.add(m); }
-  };
-  const exitX = exitLeft ? -DX : DX;
-  sign('EXIT', '非常口 · OUT', '#3dff8a', exitX); sign('WILDCARD', '敗者復活 · SECOND CHANCE', '#ff9a2a', -exitX);
+// Gabelung wie im Manga: kleiner Vorraum, Pfeil am Boden, zwei schräg abzweigende Lamellen-Gänge.
+// Links (aus Sicht des Kämpfers) die fünfeckige Wildcard-Tür, rechts die EXIT-Tür. Unbeleuchtete Materialien = harter Manga-Look.
+function cmCorridor(){
+  const g = new THREE.Group(), mats = [], geos = [], texs = [];
+  const tex = (w, h, draw, rx = 1, ry = 1) => { const cv = document.createElement('canvas'); cv.width = w; cv.height = h; draw(cv.getContext('2d'), w, h); const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rx, ry); texs.push(t); return t; };
+  const mat = (o) => { const m = new THREE.MeshBasicMaterial(Object.assign({side:THREE.DoubleSide, fog:false, toneMapped:false}, o)); mats.push(m); return m; };
+  const plane = (w, h, m, parent) => { const ge = new THREE.PlaneGeometry(w, h); geos.push(ge); const me = new THREE.Mesh(ge, m); (parent || g).add(me); return me; };
+  // Lamellenwand: helle senkrechte Paneele mit Fugen, dunkler Sockel
+  const slats = (ctx, w, h) => { ctx.fillStyle = '#ecebe6'; ctx.fillRect(0, 0, w, h); ctx.fillStyle = 'rgba(0,0,0,0.07)'; for(let x = 0; x < w; x += 32) ctx.fillRect(x + 18, 0, 12, h);
+    ctx.strokeStyle = '#141414'; ctx.lineWidth = 3; for(let x = 0; x <= w; x += 32){ ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+    ctx.fillStyle = '#2a2a2a'; ctx.fillRect(0, h - 18, w, 18); ctx.fillRect(0, 0, w, 6); };
+  const wallMat = (len, H) => mat({map:tex(256, 256, slats, Math.max(1, len/1.6), 1)});
+  const floorM = mat({map:tex(256, 256, (c, w, h) => { c.fillStyle = '#d8d7d2'; c.fillRect(0, 0, w, h); c.strokeStyle = 'rgba(0,0,0,0.25)'; c.lineWidth = 2; c.strokeRect(0, 0, w, h); }, 8, 8)});
+  const ceilM = mat({color:'#1a1a1c'});
+  const arrowT = tex(128, 192, (c, w, h) => { c.fillStyle = '#ffffff'; c.strokeStyle = '#111'; c.lineWidth = 7; c.beginPath(); c.moveTo(64, 14); c.lineTo(118, 86); c.lineTo(86, 86); c.lineTo(86, 178); c.lineTo(42, 178); c.lineTo(42, 86); c.lineTo(10, 86); c.closePath(); c.fill(); c.stroke(); });
+  const arrowM = mat({map:arrowT, transparent:true, depthWrite:false});
+  // Großer Boden + Decke über allem (verdeckt die Halle)
+  const fl = plane(30, 30, floorM); fl.rotation.x = -Math.PI/2; fl.position.set(0, 0.012, 5);
+  const H = 3.3, ce = plane(30, 30, ceilM); ce.rotation.x = Math.PI/2; ce.position.set(0, H, 5);
+  // Vorraum
+  const vw = mat({map:tex(256, 256, slats, 2, 1)});
+  for(const s of [-1, 1]){ const w = plane(3.4, H, vw); w.rotation.y = Math.PI/2; w.position.set(s*1.85, H/2, -1.1); }
+  const back = plane(3.7, H, vw); back.position.set(0, H/2, -2.8);
+  // Gabel-Pfeil am Boden (gestrichelt, nach links und rechts)
+  const fork = plane(2.2, 1.5, mat({transparent:true, depthWrite:false, map:tex(256, 176, (c) => {
+    c.setLineDash([12, 9]); c.lineWidth = 6; c.strokeStyle = '#111'; c.fillStyle = 'rgba(255,255,255,0.85)';
+    const arm = (s) => { c.beginPath(); c.moveTo(128 - s*14, 168); c.lineTo(128 - s*14, 112); c.lineTo(128 - s*70, 56); c.lineTo(128 - s*84, 70); c.lineTo(128 - s*96, 12); c.lineTo(128 - s*38, 26); c.lineTo(128 - s*52, 40); c.lineTo(128 + s*14, 104); c.lineTo(128 + s*14, 168); c.closePath(); c.fill(); c.stroke(); };
+    arm(1); arm(-1); })}));
+  fork.rotation.x = -Math.PI/2; fork.position.set(0, 0.02, 0.15);
+  // Zwei Gänge
+  const A = 0.62, W = 2.2, L = 8.6, ends = [];
+  for(const side of [1, -1]){   // +x = links im Bild (Kamera schaut nach +z)
+    const c = new THREE.Group(); c.rotation.y = side*A; c.position.set(0, 0, 0.1); g.add(c);
+    const wl = wallMat(L), inner = 1.9;
+    for(const s of [-1, 1]){ const isInner = s === -side, z0 = isInner ? inner : 0, len = L - z0 + 0.25;
+      const w = plane(len, H, isInner ? wallMat(len) : wl, c); w.rotation.y = Math.PI/2; w.position.set(s*W/2, H/2, z0 + len/2); }
+    const end = plane(W + 0.4, H, mat({color:'#e4e3de'}), c); end.position.set(0, H/2, L);   // etwas breiter: keine Lücke an den Kanten
+    for(const z of [2.6, 5.2]){ const a = plane(0.55, 0.82, arrowM, c); a.rotation.x = -Math.PI/2; a.rotation.z = Math.PI; a.position.set(0, 0.025, z); }
+    ends.push({c, side});
+    if(side === 1){
+      // Wildcard: fünfeckiger Rahmen, Flügeltür mit dunklem Flammenrand und Fünfeck-Emblem
+      const sh = new THREE.Shape(); sh.moveTo(-0.95, 0); sh.lineTo(0.95, 0); sh.lineTo(0.95, 2.15); sh.lineTo(0, 2.95); sh.lineTo(-0.95, 2.15); sh.closePath();
+      const fr = new THREE.ShapeGeometry(sh); geos.push(fr); const frame = new THREE.Mesh(fr, mat({color:'#0d0d0d'})); frame.position.set(0, 0.01, L - 0.03); c.add(frame);
+      const sh2 = new THREE.Shape(); sh2.moveTo(-0.8, 0); sh2.lineTo(0.8, 0); sh2.lineTo(0.8, 2.08); sh2.lineTo(0, 2.75); sh2.lineTo(-0.8, 2.08); sh2.closePath();
+      const fg = new THREE.ShapeGeometry(sh2); geos.push(fg); const lit = new THREE.Mesh(fg, mat({color:'#f4f2ea'})); lit.position.set(0, 0.01, L - 0.05); c.add(lit);
+      const dt = tex(256, 320, (q, w, h) => { q.fillStyle = '#f4f2ea'; q.fillRect(0, 0, w, h);
+        q.fillStyle = '#0d0d0d'; for(let i = 0; i < 70; i++){ const e = i % 4, t = Math.random(); const x = e === 0 ? t*w : e === 1 ? t*w : e === 2 ? 0 : w, y = e === 0 ? 0 : e === 1 ? h : t*h;
+          q.beginPath(); q.moveTo(x, y); const ang = Math.atan2(h/2 - y, w/2 - x) + (Math.random() - 0.5)*0.9, len = 18 + Math.random()*46; q.lineTo(x + Math.cos(ang)*len, y + Math.sin(ang)*len); q.lineTo(x + Math.cos(ang + 0.5)*12, y + Math.sin(ang + 0.5)*12); q.fill(); }
+        q.fillRect(w/2 - 2, 0, 4, h); q.beginPath(); q.arc(w/2, h*0.5, 38, 0, Math.PI*2); q.fill();
+        q.fillStyle = '#f4f2ea'; q.beginPath(); for(let i = 0; i < 5; i++){ const a = -Math.PI/2 + i*Math.PI*2/5; q[i ? 'lineTo' : 'moveTo'](w/2 + Math.cos(a)*24, h*0.5 + Math.sin(a)*24); } q.closePath(); q.fill();
+        q.fillStyle = '#0d0d0d'; q.beginPath(); for(let i = 0; i < 5; i++){ const a = -Math.PI/2 + i*Math.PI*2/5; q[i ? 'lineTo' : 'moveTo'](w/2 + Math.cos(a)*11, h*0.5 + Math.sin(a)*11); } q.closePath(); q.fill(); });
+      const door = plane(1.2, 1.95, mat({map:dt}), c); door.position.set(0, 0.98, L - 0.07); door.rotation.y = Math.PI;
+    } else {
+      // EXIT: schlichte Doppeltür, Schild darüber
+      const fr = plane(1.35, 2.25, mat({color:'#0d0d0d'}), c); fr.position.set(0, 1.12, L - 0.03);
+      const door = plane(1.15, 2.1, mat({map:tex(160, 280, (q, w, h) => { q.fillStyle = '#8f9196'; q.fillRect(0, 0, w, h); q.fillStyle = '#111'; q.fillRect(w/2 - 2, 0, 4, h); q.fillRect(w/2 - 16, h*0.5, 8, 26); q.fillRect(w/2 + 8, h*0.5, 8, 26); q.strokeStyle = '#111'; q.lineWidth = 6; q.strokeRect(3, 3, w - 6, h - 6); })}), c); door.position.set(0, 1.05, L - 0.05); door.rotation.y = Math.PI;
+      const sg = plane(0.62, 0.22, mat({map:tex(192, 68, (q, w, h) => { q.fillStyle = '#0d0d0d'; q.fillRect(0, 0, w, h); q.fillStyle = '#ffffff'; q.font = 'bold 44px sans-serif'; q.textAlign = 'center'; q.textBaseline = 'middle'; q.fillText('EXIT', w/2, h/2 + 2); })}), c); sg.position.set(0, 2.5, L - 0.05); sg.rotation.y = Math.PI;
+    }
+  }
+  // Keil zwischen den Gängen
+  const wedge = plane(0.6, H, vw); wedge.position.set(0, H/2, 0.1 + 1.9*Math.cos(A) + (W/2)*Math.sin(A) + 0.02);   // schließt die Spitze zwischen den Gängen
   scene.add(g);
-  return {g, Z1, DX, flick(t){ lights.forEach((m, i) => { const f = (Math.sin(t*37 + i*13) > 0.93) || (i === lights.length - 1 && Math.sin(t*9) > 0.5); m.material.opacity = f ? 0.15 : 0.95; }); },
-    dispose(){ scene.remove(g); for(const m of mats) m.dispose(); for(const x of geos) x.dispose && x.dispose(); }};
+  return {g, flick(){}, dispose(){ scene.remove(g); for(const m of mats) m.dispose(); for(const x of geos) x.dispose(); for(const t of texs) t.dispose(); }};
 }
+// Kurz und knackig, für alle identisch: kein Schritt in eine Richtung, nur Blick links/rechts, dann Schwarz.
 function cmCorridorShots(p){
-  const h = Math.imul(p.id + 17, 2654435761) >>> 0, exitLeft = !!(h & 1), goX = (h & 2) ? 1.1 : -1.1, first = p.name.split(' ')[0];
-  const behind = (D) => { const q = D.E && ragdolls.includes(D.E) ? D.E.parts.pelvis.group.position : V3(0, 1, 0); return q; };
+  const first = p.name.split(' ')[0];
+  const head = (D) => D.E && ragdolls.includes(D.E) ? ssHead(D.E) : V3(0, 1.6, 0);
   return [
-    {d:4.8, enter(D){ scStamp(null); scSub(null); scKanji(null); scSpotOff(); scFlash('#000000', 0.6, 0.1);
+    {d:2.0, noHold:true, enter(D){ scStamp(null); scSub(null); scKanji(null); scTitle(null); scSpotOff(); scDirector(false); scFlash('#000000', 0.35, 0.05);
         for(const r of [...ragdolls]) if(r !== D.E) removeRagdoll(r);
-        D.cor = cmCorridor(exitLeft); scWalkOn(); scMood('blue');
-        if(D.E){ scRevive(D.E); scPlace(D.E, 0, 0, 0); D.E.ssPose = null; }
-        scTitle(p.name.toUpperCase(), 'LEAVES THE FIELD', '#c9d4e8'); ssS('rumble', {gain:0.4}); ssS('heartbeat', {gain:0.5}); },
-      tick(D, k, dt, t){ if(D.cor) D.cor.flick(t); if(t > 0.6 && D.E) scWalk(D.E, 0, 10.2, true); if(t > 2.2 && !D.t0){ D.t0 = 1; scTitle(null); } },
-      cam:(D, k) => { const q = behind(D); return {p:V3(q.x + 0.55, 1.45, Math.max(-3.0, q.z - 2.7)), l:V3(q.x*0.4, 1.55, 13), fov:50}; }},
-    {d:3.4, enter(D){ ssS('step', {gain:0.4}); },
-      tick(D, k, dt, t){ if(D.cor) D.cor.flick(t + 5); if(D.E) scWalk(D.E, 0, 10.2, true); },
-      cam:(D, k) => { const h0 = D.E ? ssHead(D.E) : V3(0, 1.6, 8); return {p:V3(1.55, 2.2, 12.2), l:V3(h0.x, h0.y - 0.2, h0.z), fov:48}; }},
-    {d:3.6, enter(D){ scKanji('岐路'); scSub(p.name, '…', '#ff8a96'); ssS('heartbeat', {gain:0.8}); if(D.E){ D.E.moveInput.set(0, 0); } },
-      tick(D, k, dt, t){ if(D.cor) D.cor.flick(t + 9); if(D.E){ D.E.wcWalk = true; D.E.moveInput.set(0, 0); D.E.lookYaw = t < 1.1 ? -0.65 : t < 2.3 ? 0.65 : 0; } },
-      cam:(D, k) => { const q = behind(D); return {p:V3(q.x - 0.45, 1.8, q.z - 1.8 - k*0.3), l:V3(0, 1.9, 13), fov:52}; }},
-    {d:2.8, enter(D){ scSub(null); scKanji(null); },
-      tick(D, k, dt, t){ if(D.cor) D.cor.flick(t + 13); if(D.E && t < 1.6) scWalk(D.E, goX, 12.6, true);
-        if(t > 0.9 && !D.bk){ D.bk = 1; scBlack(true); } if(t > 1.7 && !D.dr){ D.dr = 1; ssS('whoomp', {gain:0.7}); ssS('creak', {gain:0.4}); if(D.E){ removeRagdoll(D.E); D.E = null; } } },
-      cam:(D, k) => { const q = behind(D); return {p:V3(q.x*0.5, 0.9, q.z - 2.6), l:V3(0, 1.6, 13), fov:48}; }},
-    {d:3.8, enter(D){ scBlack(false); scTitle('?', `${first} · EXIT OR WILDCARD`.toUpperCase(), '#c9d4e8'); ssS('dissonance', {gain:0.5}); },
-      tick(D, k, dt, t){ if(D.cor) D.cor.flick(t + 17); },
-      cam:(D, k) => ({p:lerpV(V3(0, 1.55, 5.6), V3(0, 1.6, 7.4), ssEase(k)), l:V3(0, 1.7, 13), fov:50})},
+        D.cor = cmCorridor(); scWalkOn(); scMood('none');
+        if(D.E){ scRevive(D.E); scPlace(D.E, 0, -0.4, 0); D.E.ssPose = null; D.E.wcWalk = true; D.E.moveInput.set(0, 0); }
+        ssS('heartbeat', {gain:0.6}); },
+      tick(D){ if(D.E){ D.E.wcWalk = true; D.E.moveInput.set(0, 0); D.E.lookYaw = 0; } },
+      cam:(D, k) => { const h = head(D); return {p:V3(h.x - 0.08, h.y + 0.12, h.z - 0.95 - (1 - k)*0.5), l:V3(0, 1.45, 7), fov:62}; }},
+    {d:1.4, noHold:true, enter(D){ ssS('dissonance', {gain:0.45}); shake = Math.max(shake, 0.08); speedLines(0.5, 0.4, '#ffffff'); },
+      tick(D, k, dt, t){ if(D.E){ D.E.wcWalk = true; D.E.moveInput.set(0, 0); D.E.lookYaw = t < 0.45 ? 0.55 : t < 0.9 ? -0.55 : 0; } },
+      cam:(D, k) => { const h = head(D); return {p:V3(h.x, h.y + 0.03, h.z + 0.85), l:V3(h.x, h.y + 0.02, h.z), fov:34}; }},
+    {d:1.0, noHold:true, enter(D){ ssS('heartbeat', {gain:0.9}); },
+      tick(D, k, dt, t){ if(D.E){ D.E.wcWalk = true; D.E.moveInput.set(0, 0); D.E.lookYaw = 0; } if(t > 0.55 && !D.bk){ D.bk = 1; scBlack(true); } },
+      cam:() => ({p:V3(0.35, 1.25, -0.9), l:V3(0, 0, 0.25), fov:52})},
+    {d:1.9, noHold:true, enter(D){ ssS('whoomp', {gain:0.6}); if(D.E){ removeRagdoll(D.E); D.E = null; } setTimeout(() => scBlack(false), 250);
+        setTimeout(() => { if(SSC.cur && D.cor) scTitle('?', `${first} · EXIT OR WILDCARD`.toUpperCase(), '#ffffff'); }, 450); },
+      cam:(D, k) => ({p:V3(0, 1.55, -1.6 + k*0.4), l:V3(0, 1.4, 7), fov:62})},
   ];
 }
 const _cmFw = scFarewell;
