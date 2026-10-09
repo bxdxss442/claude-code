@@ -86,3 +86,11 @@ The variants come from a variant engine. While a technique runs, a context attac
 - **Domains:** Closed (classic barrier) · Open (no barrier, covers the whole arena, weaker) · Compressed (tiny barrier, brutal sure-hit)
 
 Which building blocks each technique uses was measured automatically (`VAR_USE`); the three variants per technique follow from that. Variants appear in the fighter view, in the creator, on the gacha soul flames, and once per fight above the fighter's head on first use.
+
+## 9:16 vertical mode for short videos (v64)
+
+- **Options (♪) → “9:16 Vertical”** or **F9** switches the whole game into a centered portrait frame (black bars left and right). The setting is remembered.
+- The renderer, post-processing, on-screen projection, HUD, cutscene texts and overlays all run inside the frame; `vw` sizes in the CSS are converted to the frame width.
+- The camera uses a taller field of view and a little more distance. An **auto-fit** zooms out smoothly until every active fighter is in the middle of the frame, then eases back in. Cinematic letterbox bars are slimmer in this mode.
+- **“Clean UI”** or **F10** hides the match buttons and the cutscene skip button so you can record straight away. The ♪ button stays faintly visible in the corner. Pause overlays stay visible.
+- For recording, capture the browser window or the centered frame (for example with an OBS crop). A 1080 px tall window gives a 608×1080 frame.

@@ -23300,6 +23300,106 @@ const _varUlt = ultStart; ultStart = function(a, b, K){ const S = _varUlt(a, b, 
 const _varStep = UltSeq.prototype.step; UltSeq.prototype.step = function(dt){ return this._vctx ? varRun(this._vctx, _varStep, this, [dt]) : _varStep.call(this, dt); };
 try{ Object.assign(window.__arena, {VAR, varList, varInfo, varCtx, varIndexFor, VAR_ARCH, varPool:() => [...varPool()], ultStep:(dt) => ultStep(dt), kdOpenV:(i) => kdOpen(i)}); }catch(e){}
 
+
+/* ============================ ui/ Hochformat 9:16 für Kurzvideos (v64) ============================ */
+// Das ganze Spiel (Canvas + alle Overlays) läuft in einem zentrierten 9:16-Rahmen. window.innerWidth/innerHeight liefern dann die Rahmengröße,
+// damit Renderer, Post-Processing, Bildschirm-Projektion und Speedlines stimmen. Die Kamera bekommt ein höheres Sichtfeld und etwas mehr Abstand,
+// so dass das Geschehen trotz schmalerem Bild zentral im Bild bleibt. vw-Angaben im CSS werden auf die Rahmenbreite umgerechnet.
+const VT = {on:false, clean:false, w:0, h:0, x:0, y:0, rules:[], obs:null, fovS:1.6, distK:1.05};
+const _vtDW = Object.getOwnPropertyDescriptor(window, 'innerWidth'), _vtDH = Object.getOwnPropertyDescriptor(window, 'innerHeight');
+const vtRealW = () => _vtDW && _vtDW.get ? _vtDW.get.call(window) : document.documentElement.clientWidth;
+const vtRealH = () => _vtDH && _vtDH.get ? _vtDH.get.call(window) : document.documentElement.clientHeight;
+try{
+  Object.defineProperty(window, 'innerWidth', {configurable:true, enumerable:true, get(){ return VT.on ? VT.w : vtRealW(); }});
+  Object.defineProperty(window, 'innerHeight', {configurable:true, enumerable:true, get(){ return VT.on ? VT.h : vtRealH(); }});
+}catch(e){ console.warn('9:16: innerWidth nicht überschreibbar', e); }
+const vtCss = document.createElement('style');
+vtCss.textContent = `html.vt{background:#000;}
+html.vt #av-lb i{max-height:4.5vh;}
+html.vt-clean body.ss-view #ss-top, html.vt-clean #cm-restart, html.vt-clean .ssc-skip{display:none !important;} html.vt-clean #opt-btn{opacity:.12;} html.vt-clean #opt-btn:hover{opacity:1;}
+html.vt #teams{gap:5px;top:10px;max-width:calc(var(--vtw) - 12px);flex-wrap:wrap;justify-content:center;row-gap:4px;} html.vt #teams > *{min-width:0;flex-shrink:1;} html.vt #teams .tn{font-size:12px;padding:2px 5px;border-width:2px;box-shadow:2px 2px 0 var(--ink);} html.vt #teams .pip{width:18px;} html.vt #teams .clk{padding:2px 6px;} html.vt #teams .clk b{font-size:13px;}
+html.vt body{position:fixed;left:var(--vtx);top:var(--vty);width:var(--vtw);height:var(--vth);margin:0;transform:translateZ(0);overflow:hidden;contain:paint;box-shadow:0 0 0 1px #222;}
+#vt-hint{position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:9999;background:rgba(0,0,0,.75);color:#fff;font:700 12px var(--f-body,system-ui);padding:6px 12px;border-radius:4px;pointer-events:none;transition:opacity .4s;}`;
+document.head.appendChild(vtCss);
+// vw → Rahmenbreite (rekursiv auch in @media-Blöcken)
+const VT_RX = /(-?\d*\.?\d+)vw\b/g;
+function vtRewrite(rules){
+  for(const r of rules){
+    if(r.cssRules && !r.style){ try{ vtRewrite(r.cssRules); }catch(e){} continue; }
+    const st = r.style; if(!st || r.__vt) continue;
+    if(r.cssRules) try{ vtRewrite(r.cssRules); }catch(e){}
+    r.__vt = true;
+    for(let i = 0; i < st.length; i++){
+      const p = st[i], v = st.getPropertyValue(p); if(!v || v.indexOf('vw') < 0) continue;
+      VT_RX.lastIndex = 0; if(!VT_RX.test(v)) continue;
+      const nv = v.replace(VT_RX, (m, n) => `calc(var(--vw1) * ${n})`), pr = st.getPropertyPriority(p);
+      VT.rules.push([r, p, v, pr]); st.setProperty(p, nv, pr);
+    }
+  }
+}
+function vtRewriteAll(){ for(const sh of document.styleSheets){ let rs; try{ rs = sh.cssRules; }catch(e){ continue; } if(rs) vtRewrite(rs); } }
+function vtRestore(){ for(const [r, p, v, pr] of VT.rules){ try{ r.style.setProperty(p, v, pr); }catch(e){} delete r.__vt; } VT.rules = []; vtClearMarks(); }
+function vtClearMarks(){ for(const sh of document.styleSheets){ let rs; try{ rs = sh.cssRules; }catch(e){ continue; } const walk = (L) => { for(const r of L){ delete r.__vt; if(r.cssRules) try{ walk(r.cssRules); }catch(e){} } }; if(rs) walk(rs); } }
+function vtLayout(){
+  const W = vtRealW(), H = vtRealH();
+  let h = H, w = Math.round(H*9/16); if(w > W){ w = W; h = Math.round(W*16/9); }
+  VT.w = w; VT.h = h; VT.x = Math.round((W - w)/2); VT.y = Math.round((H - h)/2);
+  const S = document.documentElement.style;
+  S.setProperty('--vtw', w + 'px'); S.setProperty('--vth', h + 'px'); S.setProperty('--vtx', VT.x + 'px'); S.setProperty('--vty', VT.y + 'px'); S.setProperty('--vw1', (w/100) + 'px');
+}
+// Kamera: logisches FOV bleibt, die Projektion nutzt im Hochformat ein höheres vertikales FOV (≈ gleiche Motivbreite wie vorher in der Mitte)
+const _vtUpm = camera.updateProjectionMatrix;
+camera.updateProjectionMatrix = function(){
+  if(!VT.on) return _vtUpm.call(this);
+  const f = this.fov, t = Math.tan(f*Math.PI/360)*VT.fovS;
+  this.fov = Math.min(100, Math.atan(t)*360/Math.PI); _vtUpm.call(this); this.fov = f;
+};
+const _vtUpdCam = updateCamera;
+// Auto-Fit: Im Hochformat zoomt die Spielkamera weich heraus, bis alle aktiven Kämpfer horizontal im mittleren Bildbereich liegen.
+VT.fit = 1; const _vtP = new THREE.Vector3();
+function vtFitTick(dt, focus){
+  let need = 0;
+  for(const r of ragdolls){ if(r.hidden || r.ko) continue; const t = r.parts && r.parts.torso; if(!t || !t.p) continue;
+    if(t.p.distanceTo(focus) > 40) continue; _vtP.copy(t.p).project(camera); if(_vtP.z > 1) continue; need = Math.max(need, Math.abs(_vtP.x), Math.abs(_vtP.y)*0.7); }
+  const to = need > 0.8 ? VT.fit*(1 + (need - 0.8)*1.6) : need < 0.58 ? VT.fit*0.97 : VT.fit;
+  VT.fit += (clamp(to, 1, 2.4) - VT.fit)*(1 - Math.exp(-dt*(to > VT.fit ? 4 : 1.2)));
+}
+updateCamera = function(dt, focus, baseDist){
+  if(!VT.on){ VT.fit = 1; return _vtUpdCam(dt, focus, baseDist); }
+  const r = _vtUpdCam(dt, focus, baseDist*VT.distK*VT.fit); if(Number.isFinite(focus.x + focus.y + focus.z)) vtFitTick(dt, focus); return r;
+};
+function vtApply(on, quiet){
+  VT.on = !!on;
+  document.documentElement.classList.toggle('vt', VT.on);
+  if(VT.on){ vtLayout(); vtRewriteAll();
+    if(!VT.obs){ VT.obs = new MutationObserver(() => { if(VT.on) vtRewriteAll(); }); VT.obs.observe(document.head, {childList:true}); } }
+  else vtRestore();
+  try{ localStorage.setItem('ra_vertical', VT.on ? '1' : '0'); }catch(e){}
+  window.dispatchEvent(new Event('resize'));
+  camera.updateProjectionMatrix();
+  const cb = document.getElementById('opt-vert'); if(cb) cb.checked = VT.on;
+  if(!quiet){ let h = document.getElementById('vt-hint'); if(!h){ h = document.createElement('div'); h.id = 'vt-hint'; document.body.appendChild(h); }
+    h.textContent = VT.on ? '📱 9:16 vertical – record the centered frame' : '🖥 Widescreen'; h.style.opacity = '1'; clearTimeout(VT.ht); VT.ht = setTimeout(() => { h.style.opacity = '0'; }, 1800); }
+}
+window.addEventListener('resize', () => { if(!VT.on) return; const w = VT.w, h = VT.h; vtLayout(); if(w !== VT.w || h !== VT.h) window.dispatchEvent(new Event('resize')); }, true);
+// „Clean UI“: blendet Knöpfe/Leisten für saubere Aufnahmen aus (Namen, Lebensbalken, Untertitel und Szenentexte bleiben)
+function vtClean(on){ VT.clean = !!on; document.documentElement.classList.toggle('vt-clean', VT.clean); try{ localStorage.setItem('ra_clean', VT.clean ? '1' : '0'); }catch(e){}
+  const cb = document.getElementById('opt-clean'); if(cb) cb.checked = VT.clean; }
+// Optionen im Optionsmenü + Tastenkürzel F9 (9:16) / F10 (Clean UI)
+(function vtUi(){
+  const P = document.getElementById('opt-panel'); if(!P) return;
+  const row = document.createElement('label'); row.innerHTML = `9:16 Vertical<input type="checkbox" id="opt-vert" style="justify-self:start;width:18px;height:18px;accent-color:var(--crimson,#e8323c)"><span></span>`;
+  const anchor = P.querySelector('#opt-xray'); (anchor ? anchor.closest('label') : P.querySelector('.row')).after(row);
+  const cb = row.querySelector('input'); cb.onchange = () => vtApply(cb.checked);
+  const row2 = document.createElement('label'); row2.innerHTML = `Clean UI<input type="checkbox" id="opt-clean" style="justify-self:start;width:18px;height:18px;accent-color:var(--crimson,#e8323c)"><span></span>`;
+  row.after(row2); const cb2 = row2.querySelector('input'); cb2.onchange = () => vtClean(cb2.checked);
+  const hint = P.querySelector('.hint'); if(hint) hint.insertAdjacentHTML('beforeend', ' “9:16 Vertical” (F9) turns the whole game into a centered portrait frame for short videos – the camera widens and zooms out so every fighter stays in the middle. “Clean UI” (F10) hides buttons for recording; the ♪ button stays faintly visible in the corner.');
+})();
+window.addEventListener('keydown', (e) => { if(e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+  if(e.code === 'F9'){ e.preventDefault(); vtApply(!VT.on); } else if(e.code === 'F10'){ e.preventDefault(); vtClean(!VT.clean); } });
+try{ if(localStorage.getItem('ra_vertical') === '1') vtApply(true, true); if(localStorage.getItem('ra_clean') === '1') vtClean(true); }catch(e){}
+try{ Object.assign(window.__arena, {vtApply, vtState:() => ({on:VT.on, w:innerWidth, h:innerHeight, aspect:camera.aspect, fov:camera.fov, pfov:Math.atan(1/camera.projectionMatrix.elements[5])*360/Math.PI, cw:renderer.domElement.clientWidth, ch:renderer.domElement.clientHeight, rules:VT.rules.length, fit:VT.fit})}); }catch(e){}
+
 requestAnimationFrame(frame);
 } // startGame
 </script>
