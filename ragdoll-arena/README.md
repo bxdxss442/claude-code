@@ -91,6 +91,6 @@ Which building blocks each technique uses was measured automatically (`VAR_USE`)
 
 - **Options (♪) → “9:16 Vertical”** or **F9** switches the whole game into a centered portrait frame (black bars left and right). The setting is remembered.
 - The renderer, post-processing, on-screen projection, HUD, cutscene texts and overlays all run inside the frame; `vw` sizes in the CSS are converted to the frame width.
-- The camera uses a taller field of view and a little more distance. An **auto-fit** zooms out smoothly until every active fighter is in the middle of the frame, then eases back in. Cinematic letterbox bars are slimmer in this mode.
+- **Same director as in widescreen, just tighter:** the tournament camera stays on the current duel pair, closer than in widescreen, and turns so the two stand more one behind the other than side by side. That keeps them centered in the narrow frame. If the two are far apart (ranged combat), the camera switches to a close-up of whoever is acting right now, over their shoulder toward the opponent. A gentle fit keeps only the focused fighters in frame; the camera does not zoom out to show everyone. Cinematic letterbox bars are slimmer in this mode.
 - **“Clean UI”** or **F10** hides the match buttons and the cutscene skip button so you can record straight away. The ♪ button stays faintly visible in the corner. Pause overlays stay visible.
 - For recording, capture the browser window or the centered frame (for example with an OBS crop). A 1080 px tall window gives a 608×1080 frame.

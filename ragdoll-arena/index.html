@@ -16227,11 +16227,32 @@ function ssDuelCamera(dt){
   const P = valid(ssCamDir.pair) ? ssCamDir.pair : null;
   const focus = P ? P[0].core.p.clone().add(P[1].core.p).multiplyScalar(0.5) : F.reduce((a, o) => a.add(o.core.p), new THREE.Vector3()).multiplyScalar(1/F.length);
   // Gesamtbild nicht verlieren: Schwerpunkt aller leicht mit einbeziehen
-  const all = F.reduce((a, o) => a.add(o.core.p), new THREE.Vector3()).multiplyScalar(1/F.length); focus.lerp(all, 0.25);
+  // Hochformat (9:16): gleiche Regie, aber nur das Duell-Paar im Fokus – die Kamera dreht sich so, dass die beiden eher hintereinander als nebeneinander stehen
+  const vt = typeof VT !== 'undefined' && VT.on;
+  const all = F.reduce((a, o) => a.add(o.core.p), new THREE.Vector3()).multiplyScalar(1/F.length); if(!vt) focus.lerp(all, 0.25);
   const sep = P ? hdist(P[0].core.p, P[1].core.p) : 6;
   const spread = Math.max(...F.map(o => hdist(o.core.p, focus)));
-  ssCamDir.yaw += dt*0.05; cam.yaw = lerp(cam.yaw, ssCamDir.yaw, 1 - Math.exp(-dt*0.8)); cam.pitch = lerp(cam.pitch, 0.5, 1 - Math.exp(-dt*2));
-  updateCamera(dt, focus, clamp(8 + sep*0.5 + spread*0.25, 8.5, 15));
+  ssCamDir.yaw += dt*0.05;
+  // Stehen die beiden weit auseinander (Fernkampf), gibt es eine Einzel-Nahaufnahme auf den, der gerade handelt – über die Schulter Richtung Gegner
+  let solo = null;
+  if(vt && P){
+    const act = (r) => Math.max(r.vtActT || 0, r.lastHurtT || 0);
+    if(sep > 7.5){ ssCamDir.soloT = (ssCamDir.soloT || 0) + dt; let s0 = P.includes(ssCamDir.solo) ? ssCamDir.solo : null;
+      const cand = act(P[0]) >= act(P[1]) ? P[0] : P[1]; if(!s0 || (cand !== s0 && ssCamDir.soloT > 1.6 && act(cand) > act(s0) + 0.3)){ s0 = cand; ssCamDir.soloT = 0; }
+      ssCamDir.solo = s0; solo = s0; }
+    else ssCamDir.solo = null;
+  }
+  if(vt && P && (solo || sep > 2.2)){
+    const wrap = (v) => Math.atan2(Math.sin(v), Math.cos(v));
+    let cands;
+    if(solo){ const o = solo === P[0] ? P[1] : P[0], a = Math.atan2(solo.core.p.x - o.core.p.x, solo.core.p.z - o.core.p.z); cands = [a + 0.45, a - 0.45]; focus.copy(solo.core.p); }
+    else { const a = Math.atan2(P[1].core.p.x - P[0].core.p.x, P[1].core.p.z - P[0].core.p.z); cands = [a + 0.5, a - 0.5, a + Math.PI + 0.5, a + Math.PI - 0.5]; }
+    let bd = 9; for(const c of cands){ const d = wrap(c - ssCamDir.yaw); if(Math.abs(d) < Math.abs(bd)) bd = d; }
+    ssCamDir.yaw += bd*(1 - Math.exp(-dt*(solo ? 1.4 : 0.9)));
+  }
+  cam.yaw = lerp(cam.yaw, ssCamDir.yaw, 1 - Math.exp(-dt*0.8)); cam.pitch = lerp(cam.pitch, vt ? 0.4 : 0.5, 1 - Math.exp(-dt*2));
+  if(vt){ VT.fitPts = solo ? [solo.core.p] : P ? [P[0].core.p, P[1].core.p] : null; updateCamera(dt, focus, solo ? 6.4 : clamp(5.6 + sep*0.35, 6.2, 9)); VT.fitPts = null; }
+  else updateCamera(dt, focus, clamp(8 + sep*0.5 + spread*0.25, 8.5, 15));
   return true;
 }
 
@@ -23305,7 +23326,7 @@ try{ Object.assign(window.__arena, {VAR, varList, varInfo, varCtx, varIndexFor, 
 // Das ganze Spiel (Canvas + alle Overlays) läuft in einem zentrierten 9:16-Rahmen. window.innerWidth/innerHeight liefern dann die Rahmengröße,
 // damit Renderer, Post-Processing, Bildschirm-Projektion und Speedlines stimmen. Die Kamera bekommt ein höheres Sichtfeld und etwas mehr Abstand,
 // so dass das Geschehen trotz schmalerem Bild zentral im Bild bleibt. vw-Angaben im CSS werden auf die Rahmenbreite umgerechnet.
-const VT = {on:false, clean:false, w:0, h:0, x:0, y:0, rules:[], obs:null, fovS:1.6, distK:1.05};
+const VT = {on:false, clean:false, w:0, h:0, x:0, y:0, rules:[], obs:null, fovS:1.3, distK:1};
 const _vtDW = Object.getOwnPropertyDescriptor(window, 'innerWidth'), _vtDH = Object.getOwnPropertyDescriptor(window, 'innerHeight');
 const vtRealW = () => _vtDW && _vtDW.get ? _vtDW.get.call(window) : document.documentElement.clientWidth;
 const vtRealH = () => _vtDH && _vtDH.get ? _vtDH.get.call(window) : document.documentElement.clientHeight;
@@ -23355,18 +23376,22 @@ camera.updateProjectionMatrix = function(){
   this.fov = Math.min(100, Math.atan(t)*360/Math.PI); _vtUpm.call(this); this.fov = f;
 };
 const _vtUpdCam = updateCamera;
-// Auto-Fit: Im Hochformat zoomt die Spielkamera weich heraus, bis alle aktiven Kämpfer horizontal im mittleren Bildbereich liegen.
-VT.fit = 1; const _vtP = new THREE.Vector3();
-function vtFitTick(dt, focus){
+// Wer zuletzt angegriffen/gewirkt hat (für die Einzel-Nahaufnahme der Hochformat-Regie)
+{ const _sa = Ragdoll.prototype.startAttack, _ca = Ragdoll.prototype.cast;
+  Ragdoll.prototype.startAttack = function(...a){ const r = _sa.apply(this, a); this.vtActT = this.time; return r; };
+  Ragdoll.prototype.cast = function(...a){ const r = _ca.apply(this, a); this.vtActT = this.time; return r; }; }
+// Paar-Fit: Nur das Duell-Paar, auf das die Regie gerade schaut (VT.fitPts), wird im Bild gehalten – kein Herauszoomen auf alle Kämpfer.
+VT.fit = 1; VT.fitPts = null; const _vtP = new THREE.Vector3();
+function vtFitTick(dt){
   let need = 0;
-  for(const r of ragdolls){ if(r.hidden || r.ko) continue; const t = r.parts && r.parts.torso; if(!t || !t.p) continue;
-    if(t.p.distanceTo(focus) > 40) continue; _vtP.copy(t.p).project(camera); if(_vtP.z > 1) continue; need = Math.max(need, Math.abs(_vtP.x), Math.abs(_vtP.y)*0.7); }
-  const to = need > 0.8 ? VT.fit*(1 + (need - 0.8)*1.6) : need < 0.58 ? VT.fit*0.97 : VT.fit;
-  VT.fit += (clamp(to, 1, 2.4) - VT.fit)*(1 - Math.exp(-dt*(to > VT.fit ? 4 : 1.2)));
+  for(const p of VT.fitPts || []){ _vtP.copy(p).project(camera); if(_vtP.z > 1) continue; need = Math.max(need, Math.abs(_vtP.x), Math.abs(_vtP.y)*0.75); }
+  const to = need > 0.72 ? VT.fit*(1 + (need - 0.72)*1.4) : need < 0.5 ? VT.fit*0.97 : VT.fit;
+  VT.fit += (clamp(to, 1, 1.5) - VT.fit)*(1 - Math.exp(-dt*(to > VT.fit ? 3 : 1.2)));
 }
 updateCamera = function(dt, focus, baseDist){
   if(!VT.on){ VT.fit = 1; return _vtUpdCam(dt, focus, baseDist); }
-  const r = _vtUpdCam(dt, focus, baseDist*VT.distK*VT.fit); if(Number.isFinite(focus.x + focus.y + focus.z)) vtFitTick(dt, focus); return r;
+  if(!VT.fitPts) VT.fit += (1 - VT.fit)*(1 - Math.exp(-dt*1.5));
+  const r = _vtUpdCam(dt, focus, baseDist*VT.distK*VT.fit); if(VT.fitPts) vtFitTick(dt); return r;
 };
 function vtApply(on, quiet){
   VT.on = !!on;
