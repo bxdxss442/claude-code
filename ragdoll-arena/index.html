@@ -11829,7 +11829,7 @@ function avRender(){
     for(let i = 0; i < 2; i++){ PP.blur.uniforms.t.value = PP.b1.texture; PP.blur.uniforms.dir.value.set((1 + i)/bw, 0); ppPass(PP.blur, PP.b2); PP.blur.uniforms.t.value = PP.b2.texture; PP.blur.uniforms.dir.value.set(0, (1 + i)/bh); ppPass(PP.blur, PP.b1); }
   }
   const U = PP.fin.uniforms, G = AV.grade;
-  U.tS.value = PP.rt.texture; U.tB.value = PP.b1.texture; U.uBloom.value = bl; U.uCA.value = (AV.ca + AV.caK)*(CG.active && CG.q === 0 ? 0 : 1); U.uRad.value = AV.rad + AV.radK;
+  U.tS.value = PP.rt.texture; U.tB.value = PP.b1.texture; U.uBloom.value = bl; U.uCA.value = Math.min(0.004, AV.ca + AV.caK)*(CG.active && CG.q === 0 ? 0 : 1); U.uRad.value = AV.rad + AV.radK;
   U.uSat.value = G.sat; U.uCon.value = G.con; U.uExp.value = G.exp; U.uTint.value.copy(G.tint); U.uTintAmt.value = G.tintAmt; U.uVig.value = G.vig; U.uRed.value = G.red;
   U.uImp.value = AV.imp; U.uInv.value = AV.impInv; U.uImpCol.value.copy(AV.impCol); U.uAsp.value = window.innerWidth/Math.max(1, window.innerHeight);
   for(let i = 0; i < 4; i++){ const d = AV.distUni[i]; U.uD.value[i].set(d ? d.sx : 0, d ? d.sy : 0, d ? d.sr : 0, d ? d.st : 0); }
@@ -11960,8 +11960,8 @@ function avUpdate(dt){
   const top = AV.gradeHold[AV.gradeHold.length - 1] || {}, G = AV.grade, k = 1 - Math.exp(-dt*8);
   G.sat += ((top.sat ?? 1) - G.sat)*k; G.con += ((top.con ?? 1) - G.con)*k; G.exp += ((top.exp ?? 1) - G.exp)*k; G.vig += ((top.vig ?? 0.18) - G.vig)*k; G.red += ((top.red ?? 0) - G.red)*k;
   G.tintAmt += ((top.tintAmt ?? 0) - G.tintAmt)*k; if(top.tint) G.tint.lerp(_avc.set(top.tint), k);
-  AV.bloomK = Math.max(0, AV.bloomK - dt*2.2); AV.caK = Math.max(0, AV.caK - dt*0.04); AV.radK = Math.max(0, AV.radK - dt*2.5);
-  AV.rad = typeof EPIC !== 'undefined' && EPIC.cur && EPIC.cur.timeScale < 0.9 ? 0.4 : 0;
+  AV.bloomK = Math.max(0, AV.bloomK - dt*2.2); AV.caK = AV.caK > 0.0002 ? AV.caK*Math.exp(-dt*9) : 0; AV.radK = Math.max(0, AV.radK - dt*2.5);
+  AV.rad = typeof EPIC !== 'undefined' && EPIC.cur && EPIC.cur.timeScale < 0.9 ? 0.15 : 0;
   if(AV.impT > 0){ AV.impT -= dt; if(AV.impT <= 0) AV.imp = 0; }
   // FOV-Feder
   { let rem = Math.min(dt, 0.1); while(rem > 0){ const h = Math.min(rem, 1/240); AV.fovV += (-AV.fovK*220 - AV.fovV*18)*h; AV.fovK += AV.fovV*h; rem -= h; } AV.fovK = clamp(AV.fovK, -12, 12); }
@@ -12069,7 +12069,7 @@ function avDistGain(p){ if(!p) return 1; const L = auListener(), d = Math.hypot(
 // Zusatz-Effekte einzelner Moves
 const FXF = {
   red:(r) => { const h = r.parts.lowerArmR.p; avDistort(h, 2.2, 0.9, 0.3); avBloom(0.4); },
-  blue:(r) => { const f = facingVec(r), c = r.core.p.clone().addScaledVector(f, 3); avDistort(c, 3, -0.9, 0.9, {hold:0.4}); },
+  blue:(r) => { const f = facingVec(r), c = r.core.p.clone().addScaledVector(f, 3); avDistort(c, 3, -0.6, 0.5, {hold:0.15}); },
   mass:(r) => { avDistort(r.parts.lowerArmR.p, 1.6, 0.7, 0.25, {follow:() => r.parts.lowerArmR.p}); },
   soul:(r) => { avDistort(r.parts.lowerArmR.p, 1.4, -0.5, 0.3); },
   awaken:(r) => { avBloom(0.9); avRing(r.core.p, '#ff1f3d', 4, 0.5); if(avRelevant(r)){ gradePush('demon', {sat:0.6, red:1, con:1.25, vig:0.5}, 2.2); speedLines(1, 0.35, '#ff1f3d'); } },
@@ -12187,7 +12187,7 @@ BeamFx = class extends _BeamFx{ constructor(a, b, color, w = 0.12, life = 0.3){ 
 function avClass(C, on){ return class extends C{ constructor(...a){ super(...a); try{ on.init && on.init(this); }catch(e){} }
   update(dt){ const r = super.update(dt); try{ on.tick && on.tick(this, dt); if(!r && !this._avEnd){ this._avEnd = true; on.end && on.end(this); } }catch(e){} return r; } }; }
 const posOf = (e) => e.p || e.pos || (e.g && e.g.position) || (e.c) || (e.owner && e.owner.core.p);
-BlackHole = avClass(BlackHole, {init(e){ e._L = auLoop('blackhole', {gain:0.6*avDistGain(e.p)}); avDistort(e.p, e.R*0.6, -1.1, e.dur, {follow:e.p, hold:e.dur*0.7}); if(avRelevant(e.owner)){ gradePush('bh', {exp:0.72, sat:0.85, vig:0.55}, e.dur); } },
+BlackHole = avClass(BlackHole, {init(e){ e._L = auLoop('blackhole', {gain:0.6*avDistGain(e.p)}); avDistort(e.p, e.R*0.6, -0.55, Math.min(1.2, e.dur), {follow:e.p, hold:0.2}); if(avRelevant(e.owner)){ gradePush('bh', {exp:0.72, sat:0.85, vig:0.55}, e.dur); } },
   tick(e){ if(e._L) e._L.set(0.6*avDistGain(e.p)); }, end(e){ if(e._L) e._L.stop(0.05); auSilence(150); sfx('sub_drop', {pos:e.p, len:1.5, delay:0.15, prio:2}); sfx('explosion', {pos:e.p, delay:0.15, prio:2}); avRing(e.p, '#ffcf5a', 8, 0.5); after(0.15, () => { avBloom(1.2); if(avRelevant(e.owner)){ shake = Math.max(shake, 0.6); fovPunch(-8); avImpact('#ffcf5a', 0.05); } }); }});
 CurseBomb = avClass(CurseBomb, {tick(e, dt){ e._tk = (e._tk || 0) - dt; const p = e.T && e.T.core ? e.T.core.p : null; if(e.t > 0 && p && e._tk <= 0){ sfx('heartbeat', {pos:p, gain:0.5, pitch:1.6, rl:0.05}); e._tk = Math.max(0.12, 0.5 - e.t*0.25); } }});
 TrainDoors = avClass(TrainDoors, {init(e){ sfx('station', {pos:e.c}); }, tick(e){ if(e.hit && !e._h){ e._h = true; sfxs(['metal', 'taiko', 'taiko:0.7:1.3:0.05'], {pos:e.c}); if(avRelevant(e.target)){ ctx.hitstop = Math.max(ctx.hitstop, 0.08); shake = Math.max(shake, 0.3); } } }});
@@ -12258,7 +12258,7 @@ tryFinisher = function(t, killer, env, onEnd){ const ok = _tryFin(t, killer, env
 
 // ---- Domänen ----
 const DOM_AV = {
-  void:{grade:{sat:0.85, con:1.3, tint:'#9fb6ff', tintAmt:0.35, vig:0.5}, ca:0.002},
+  void:{grade:{sat:0.85, con:1.3, tint:'#9fb6ff', tintAmt:0.35, vig:0.5}},
   garden:{grade:{sat:0.8, con:1.12, tint:'#8fffd0', tintAmt:0.2, vig:0.45}},
   atelier:{grade:{sat:0.8, con:1.08, tint:'#e2f59a', tintAmt:0.25, vig:0.5}},
   jackpot:{grade:{sat:1.3, con:1.1, exp:1.05, vig:0.3}},
@@ -12272,7 +12272,7 @@ function avDomains(dt){
       sfxs(['wood', 'wood:1:1.3:0.12'], {pos:c}); sfx('rumble', {pos:c, len:1.0, delay:0.3}); sfx('riser', {pos:c, len:0.9, delay:0.3}); AU.duckTo = 0.25; }
     D.t += dt;
     const inside = Math.hypot(L.x - d.c.x, L.z - d.c.z) < d.R;
-    if(!D.opened && d.k > 0.9){ D.opened = true; auSilence(90); sfx('sub_drop', {pos:d.c, len:1.6, delay:0.09, prio:3, far:120}); sfx('gong', {pos:d.c, delay:0.09, far:120}); avBloom(1); avDistort(d.c, d.R, 0.8, 0.5, {grow:0.5});
+    if(!D.opened && d.k > 0.9){ D.opened = true; auSilence(90); sfx('sub_drop', {pos:d.c, len:1.6, delay:0.09, prio:3, far:120}); sfx('gong', {pos:d.c, delay:0.09, far:120}); avBloom(1); avDistort(d.c, d.R, 0.4, 0.3, {grow:0.5}); avCA(0.003);
       if(inside || avRelevant(d.owner)) avImpact(d.T.rim || '#ffffff', 0.07); D.loop = auLoop(d.theme, {gain:0.0001}); AU.duckTo = 1; }
     if(D.loop) D.loop.set(inside ? 0.33 : 0.05*avDistGain(d.c), 0.3);
     const G = DOM_AV[d.theme];
@@ -12298,7 +12298,7 @@ const _enact = enactRule;
 enactRule = function(r, R){ const res = _enact(r, R); sfx('jingle', {bus:AU.ui, gain:0.7}); sfx('gong', {bus:AU.ui, delay:0.5, gain:0.7}); sfx('bell', {bus:AU.ui, f:660, delay:0.5, gain:0.5}); gradePush('rule', {sat:1.05, tint:'#ffd27a', tintAmt:0.25, vig:0.35}, 3.2); return res; };
 const _reinc = reincarnate;
 reincarnate = function(t){ const res = _reinc(t); if(t && t.core){ const p = t.core.p; sfx('whisper', {pos:p, len:1}); sfx('murmur', {pos:p, n:8, len:1, gain:0.6}); sfx('roar', {pos:p, delay:1.1, len:0.8}); sfx('taiko', {pos:p, delay:1.1, pitch:0.7});
-  avDistort(p, 3, -0.8, 1.0, {hold:0.3}); if(avRelevant(t)) gradePush('reborn', {sat:0.2, tint:'#b04aff', tintAmt:0.3, vig:0.6}, 1.4); } return res; };
+  avDistort(p, 3, -0.5, 0.5, {hold:0.1}); if(avRelevant(t)) gradePush('reborn', {sat:0.2, tint:'#b04aff', tintAmt:0.3, vig:0.6}, 1.4); } return res; };
 const _cgLog = cgLog;
 cgLog = function(text, tone){ _cgLog(text, tone); if(CG.active && !EPIC.cur) sfx(tone === 'kill' || /besiegt/.test(text) ? 'body_fall' : 'ui', {bus:AU.ui, gain:0.4, rl:0.25}); };
 
