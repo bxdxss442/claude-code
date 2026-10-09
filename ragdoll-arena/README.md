@@ -1,7 +1,9 @@
 # Ragdoll Arena
 
 Übernommen aus dem claude.ai-Artefakt „Ragdoll Arena“
-(https://claude.ai/artifact/NVA7cPY6B9PwpQZU3g4tre, Stand 2026-10-08).
+(https://claude.ai/artifact/NVA7cPY6B9PwpQZU3g4tre, Stand 2026-10-08)
+und vollständig ins Englische übersetzt (UI, Moves, Items, Dialoge,
+Regeln, KI-Prompts). Code-Kommentare sind noch auf Deutsch.
 
 - `index.html` – das komplette Spiel als eine Datei (HTML, CSS, JS inline).
 - Lokal starten: `index.html` im Browser öffnen oder
