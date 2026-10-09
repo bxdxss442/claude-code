@@ -21435,6 +21435,644 @@ function saOffChanged(){
   sync();
 })();
 
+
+
+/* ================= Content-Modus, Szenen-Galerie & Kampf-Wiederholung (v59) ================= */
+// Content-Modus (im Turniermenü schaltbar):
+//  · Jederzeit pausieren (⏸ oder P): Kampf, Finisher und Cutscenes frieren ein.
+//  · Steal selbst wählen: Nach einem Steal-Match wird die Wahl aufgeschoben (Match-Status 'await'). Eine Szene zeigt das
+//    besiegte Team in Ketten, die Bildschirme fragen „Who will you pick?“. Beide Teams sind gesperrt, bis im Turniermenü
+//    gewählt wurde. Danach verkündet eine zweite Szene die Wahl und was mit dem Rest passiert.
+// Galerie: Jede Turnier-Cutscene wird mit einem Abbild des Turnierstands gespeichert (IndexedDB) und lässt sich identisch
+// erneut abspielen oder wieder löschen. Kampf-Wiederholung: Der Stand vor dem letzten Match wird gemerkt; „Repeat fight“
+// spult zurück und lässt den Kampf neu austragen.
+// Wildcard: Ausgeschiedene gehen am Ende ihres Abschieds durch einen Gang mit zwei Türen (EXIT / WILDCARD) – welche sie
+// nehmen, bleibt offen.
+const CM = {on:false, paused:false, force:null, resolving:false, flushing:false, batch:false, replay:null, undo:null, repeat:true, seed:null};
+try{ CM.on = localStorage.getItem('ss-content') === '1'; CM.repeat = localStorage.getItem('ss-repeat') !== '0'; }catch(e){}
+const cmAwaiting = (st) => st ? st.matches.filter(m => m.status === 'await').sort((a, b) => a.no - b.no) : [];
+const cmSides = (st, m) => { const s = m.winner; return {W:st.teams[s === 'a' ? m.a : m.b], L:st.teams[s === 'a' ? m.b : m.a], win:s === 'a' ? m.ra : m.rb, lose:s === 'a' ? m.rb : m.ra}; };
+function cmSeeded(seed, fn){ const R = Math.random; Math.random = ssRng(seed >>> 0); try{ return fn(); } finally { Math.random = R; } }
+
+/* ---------- Ergebnis aufschieben, bis gewählt wurde ---------- */
+const _cmResolve = ssResolve;
+ssResolve = function(st, m, result, how = 'sim'){
+  if(!m || m.status === 'done' || m.status === 'cancelled') return _cmResolve(st, m, result, how);
+  // Kampf-Wiederholung: Stand vor dem Match merken (nur das jeweils letzte Match)
+  if(CM.repeat && !CM.batch && !CM.resolving && !CM.replay && st === SS.st && m.status !== 'await'){
+    const s0 = m.status; try{ m.status = 'pending'; CM.undo = {json:JSON.stringify(st), id:m.id, no:m.no, lastId:SS.lastId}; }catch(e){ CM.undo = null; } finally { m.status = s0; }
+  }
+  if(CM.on && !CM.resolving && st === SS.st && m.kind === 'steal' && st.phase === 'steal'){
+    if(m.status === 'await') return m;
+    m.cmAwait = {result:{side:result.side, kos:Object.assign({}, result.kos || {}), goals:result.goals || [0, 0], reactions:result.reactions || []}, how};
+    m.status = 'await'; m.winner = result.side; m.how = how;
+    const {W, L} = cmSides(st, m);
+    ssLog(st, `#${m.no} ${m.label}: ${W.name} beats ${L.name} – waiting for your pick`);
+    return m;
+  }
+  return _cmResolve(st, m, result, how);
+};
+// Offene Wahlen zählen wie laufende Matches: niemand wird neu gepaart, die Plätze bleiben reserviert
+const _cmSched = ssSchedule;
+ssSchedule = function(st){
+  const aw = cmAwaiting(st); for(const m of aw) m.status = 'pending';
+  try{ return _cmSched(st); } finally { for(const m of aw) if(m.status === 'pending') m.status = 'await'; }
+};
+// Die gewählte Person ersetzt die Wahl des Kapitäns (nur beim ersten Zug; „Alles oder nichts“ füllt danach selbst auf)
+const _cmChoose = ssChoose;
+ssChoose = function(st, W, L, m){
+  const r = _cmChoose(st, W, L, m), F = CM.force;
+  if(F && F.id === m.id && !F.used && L.members.includes(F.pick)){
+    F.used = true; const T = st.tw; if(T && T.d && T.d.match === m.id && T.d.taken && T.d.x !== F.pick) T.d.taken = false;
+    return {captain:r.captain, pick:F.pick, why:['your choice']};
+  }
+  return r;
+};
+// Wahl ausführen (pick = Spieler-ID oder null = der Kapitän entscheidet)
+function cmResolve(st, m, pick){
+  const A = m.cmAwait; if(!A || m.status !== 'await') return null;
+  m.status = 'pending'; CM.resolving = true; CM.force = pick != null ? {id:m.id, pick, used:false} : null;
+  let out = null;
+  try{ out = ssResolve(st, m, A.result, A.how); } finally { CM.resolving = false; CM.force = null; }
+  if(m.status === 'pending') m.status = 'await'; else { delete m.cmAwait; m.cmBy = pick != null ? 'you' : 'captain'; }
+  return out;
+}
+// Endet die Steal-Phase, während noch Wahlen offen sind, entscheiden die Kapitäne (die Teams scheiden ohnehin aus)
+const _cmEnd = ssEndSteal;
+ssEndSteal = function(st, why){
+  if(st.phase === 'steal' && !CM.flushing){
+    const aw = cmAwaiting(st);
+    if(aw.length){ CM.flushing = true;
+      try{ for(const m of aw){ if(m.status !== 'await') continue;
+        if(st.phase !== 'steal'){ m.status = 'cancelled'; delete m.cmAwait; m.notes.push('Cancelled – the steal phase ended before the pick'); continue; }
+        cmResolve(st, m, null); m.notes.push('The steal phase ended – the captain picked'); } } finally { CM.flushing = false; } }
+  }
+  return _cmEnd(st, why);
+};
+// Beim Massen-Simulieren kein Abbild pro Match (das wäre bei hunderten Matches spürbar langsam)
+const _cmSimN = ssSimN; ssSimN = function(n){ CM.batch = n !== 1; try{ return _cmSimN(n); } finally { CM.batch = false; } };
+const _cmSimFinal = ssSimToFinal; ssSimToFinal = function(){ CM.batch = true; try{ return _cmSimFinal(); } finally { CM.batch = false; } };
+function cmFlushAll(){ const st = SS.st; for(const m of cmAwaiting(st)) if(m.status === 'await') cmResolve(st, m, null); ssSave(); }
+
+/* ---------- Pose & Ketten ---------- */
+SS_POSES.chained = function(set, r){ SS_POSES.kneel(set, r); set('waist', 0.12, 0, 0); set('neck', 0.42, 0, 0); set('shoulderL', 0.55, 0, 0.1); set('shoulderR', 0.55, 0, -0.1); set('elbowL', -0.7, 0, 0); set('elbowR', -0.7, 0, 0); r.leanX = -0.2; };   // leichtes Zurücklehnen hält das Knien stabil
+SS_POSES.chainedUp = function(set, r){ SS_POSES.chained(set, r); set('neck', -0.2, 0, 0); };
+const CM_IRON = toon('#9097a4'), CM_IRON_D = toon('#3a3d46');
+const CM_LINK = new THREE.TorusGeometry(0.055, 0.016, 6, 12), CM_CUFF = new THREE.TorusGeometry(0.07, 0.024, 6, 16), CM_BAND = new THREE.TorusGeometry(0.2, 0.026, 6, 26), CM_STAKE = new THREE.CylinderGeometry(0.05, 0.07, 0.42, 8);
+const _cmA = new THREE.Vector3(), _cmT = new THREE.Vector3(), _cmQ = new THREE.Quaternion(), _cmQ2 = new THREE.Quaternion(), _cmX = new THREE.Vector3(1, 0, 0), _cmRX = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI/2);
+function cmLinks(n, list){ const a = []; for(let i = 0; i < n; i++){ const m = new THREE.Mesh(CM_LINK, CM_IRON); m.scale.set(1.55, 1, 1); scene.add(m); a.push(m); list.push(m); } return a; }
+// Kettenglieder entlang einer durchhängenden Linie, abwechselnd um 90° gedreht
+function cmChainSet(L, a, b, sag){
+  const n = L.length; _cmT.subVectors(b, a); const len = _cmT.length() || 1e-3;
+  for(let i = 0; i < n; i++){ const t = (i + 0.5)/n, m = L[i];
+    m.position.lerpVectors(a, b, t); m.position.y -= sag*4*t*(1 - t);
+    _cmA.copy(_cmT).multiplyScalar(1/len); _cmA.y -= sag*4*(1 - 2*t)/len; _cmA.normalize();
+    _cmQ.setFromUnitVectors(_cmX, _cmA); if(i % 2){ _cmQ2.setFromAxisAngle(_cmA, Math.PI/2); _cmQ.premultiply(_cmQ2); } m.quaternion.copy(_cmQ); }
+}
+// Ein Gefangener: Handschellen, Kette zum Pflock hinter ihm, Eisenband um den Oberkörper
+function cmRig(r, sx, sz){
+  const g = {r, all:[], stake:V3(sx, 0.42, sz)};
+  g.cuffs = [0, 1].map(() => { const m = new THREE.Mesh(CM_CUFF, CM_IRON_D); scene.add(m); g.all.push(m); return m; });
+  g.band = new THREE.Mesh(CM_BAND, CM_IRON_D); scene.add(g.band); g.all.push(g.band);
+  g.link = cmLinks(4, g.all); g.tie = cmLinks(12, g.all);
+  const sk = new THREE.Mesh(CM_STAKE, CM_IRON_D); sk.position.set(sx, 0.2, sz); scene.add(sk); g.all.push(sk);
+  const top = new THREE.Mesh(CM_CUFF, CM_IRON); top.position.set(sx, 0.42, sz); top.rotation.x = Math.PI/2; scene.add(top); g.all.push(top);
+  return g;
+}
+const cmWrist = (r, side) => { const P = r.parts['lowerArm' + side].group; return V3(0, -0.11, 0).applyQuaternion(P.quaternion).add(P.position); };
+function cmRigTick(g){
+  const r = g.r; if(g.off || !r || !ragdolls.includes(r)) return;
+  const L = cmWrist(r, 'L'), R = cmWrist(r, 'R');
+  g.cuffs[0].position.copy(L); g.cuffs[0].quaternion.copy(r.parts.lowerArmL.group.quaternion).multiply(_cmRX);
+  g.cuffs[1].position.copy(R); g.cuffs[1].quaternion.copy(r.parts.lowerArmR.group.quaternion).multiply(_cmRX);
+  cmChainSet(g.link, L, R, 0.04);
+  cmChainSet(g.tie, L.add(R).multiplyScalar(0.5), g.stake, 0.12);
+  const T = r.parts.torso.group; g.band.position.copy(T.position); g.band.quaternion.copy(T.quaternion).multiply(_cmRX);
+}
+function cmRigOff(g, burst){
+  if(!g || g.off) return; g.off = true;
+  if(burst){ const p = g.band.position; emitParticles(p.x, p.y, p.z, 36, {speed:4, up:2.5, color:'#c9d0dc', size:0.16, life:0.7, gravity:-6}); ssS('klack', {gain:0.9}); ssS('hammer', {gain:0.5}); }
+  for(const m of g.all) scene.remove(m);
+  if(g.next){ for(const m of g.next) scene.remove(m); g.next = null; }
+}
+// Bühne: das besiegte Team kniet angekettet vor der Stirnwand, die Sieger stehen dahinter
+const CM_LZ = -13, CM_WZ = -8.6;
+function cmStage(D, m){
+  const st = SS.st, S = cmSides(st, m);
+  Object.assign(D, S); scClearActors(); ssArena(false); battle.phase = 'off'; scBallAway();
+  const n = S.lose.length;
+  D.los = S.lose.map((id, i) => { const x = (i - (n - 1)/2)*1.7, r = scActor(st.players[id], x, CM_LZ, Math.PI, 'blue'); r.ssPose = 'chained'; r.cmX = x; return r; });
+  D.rigs = D.los.map(r => cmRig(r, r.cmX, CM_LZ + 0.8));
+  for(let i = 0; i + 1 < D.rigs.length; i++){ const g = D.rigs[i]; g.next = []; cmLinks(15, g.next); g.nextTo = D.rigs[i + 1]; }
+  D.win = S.win.map((id, i) => { const r = scActor(st.players[id], (i - (S.win.length - 1)/2)*1.5, CM_WZ, Math.PI, 'red'); r.ssPose = 'crossArms'; return r; });
+}
+function cmStageTick(D){
+  for(const g of D.rigs || []){ cmRigTick(g);
+    if(g.next && g.nextTo && !g.off && !g.nextTo.off) cmChainSet(g.next, g.band.position.clone().setY(g.band.position.y - 0.05), g.nextTo.band.position.clone().setY(g.nextTo.band.position.y - 0.05), 0.3);
+    else if(g.next){ for(const m of g.next) scene.remove(m); g.next = null; } }
+}
+function cmStageOff(D){ for(const g of D.rigs || []) cmRigOff(g, false); D.rigs = []; }
+const cmTicked = (shots) => shots.map(sh => { const t0 = sh.tick; return Object.assign({}, sh, {tick(D, k, dt, t){ cmStageTick(D); if(t0) t0(D, k, dt, t); }}); });
+// Bildschirme der Halle: große Schrift
+function cmScreenCanvas(lines, sub, col = '#ff3b4f'){
+  const cv = document.createElement('canvas'); cv.width = 1024; cv.height = 448; const g = cv.getContext('2d');
+  const grd = g.createLinearGradient(0, 0, 0, 448); grd.addColorStop(0, '#2a0408'); grd.addColorStop(1, '#070103'); g.fillStyle = grd; g.fillRect(0, 0, 1024, 448);
+  g.strokeStyle = 'rgba(255,60,80,0.16)'; g.lineWidth = 1; for(let y = 0; y < 448; y += 6){ g.beginPath(); g.moveTo(0, y); g.lineTo(1024, y); g.stroke(); }
+  g.strokeStyle = col; g.lineWidth = 10; g.strokeRect(10, 10, 1004, 428);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  if(sub){ g.fillStyle = col; g.font = 'bold 34px "JetBrains Mono",monospace'; let s = 34; while(g.measureText(sub).width > 940 && s > 16){ s -= 2; g.font = `bold ${s}px "JetBrains Mono",monospace`; } g.fillText(sub, 512, 60); }
+  const L = lines.slice(0, 3), n = L.length, big = n === 1 ? 150 : n === 2 ? 104 : 74, c = sub ? 252 : 224, y0 = c - (n - 1)*big*0.55;
+  L.forEach((t, i) => { let s = big; g.font = `bold ${s}px "Dela Gothic One",sans-serif`; while(g.measureText(t).width > 950 && s > 24){ s -= 4; g.font = `bold ${s}px "Dela Gothic One",sans-serif`; }
+    g.fillStyle = '#ffffff'; g.shadowColor = col; g.shadowBlur = 26; g.fillText(t, 512, y0 + i*big*1.1); g.shadowBlur = 0; });
+  return cv;
+}
+const cmScreens = (lines, sub, col) => scScreensCanvas(cmScreenCanvas(lines, sub, col));
+
+/* ---------- Szene 1: Das besiegte Team in Ketten – „Who will you pick?“ ---------- */
+function scCmChains(m){
+  const st = SS.st, P = (i) => st.players[i], S = cmSides(st, m);
+  const each = S.lose.map((id, i) => ({d:2.5, enter(D){ const p = P(id), r = D.los[i], k = (m.cmAwait && m.cmAwait.result.kos[id]) || (m.kos && m.kos[id]) || 0;
+      if(D.prev && D.prev !== r) D.prev.ssPose = 'chained'; D.prev = r; D.focus = r; if(r) r.ssPose = 'chainedUp';
+      scKanji(null); scTitle(p.name.toUpperCase(), `${SS_EGO[p.ego].label} · ${SS_ROLES[p.role]} · rating ${p.ovr}${k ? ` · ${k} K.O.` : ''}`.toUpperCase(), '#ff8a96');
+      ssS('klack', {gain:0.8}); shake = Math.max(shake, 0.05); },
+    cam:(D, k) => { const h = ssHead(D.focus); return {p:V3(h.x + 0.35, h.y - 0.3, h.z - 1.8 + k*0.25), l:V3(h.x, h.y - 0.05, h.z), fov:40}; }}));
+  return {name:'cm-chains',
+    setup(D){ cmStage(D, m); scMood('red'); cmScreens(['THE DEFEATED', S.L.name.toUpperCase()], `MATCH #${m.no} · ${m.label}`.toUpperCase()); ssS('rumble', {gain:0.7}); ssS('heartbeat', {gain:0.6}); },
+    cleanup(D){ cmStageOff(D); scClearActors(); ssLobbyScreens(); },
+    shots:cmTicked([
+      {d:3.4, enter(){ scTitle(S.L.name.toUpperCase(), `DEFEATED · MATCH #${m.no} · ${m.label}`.toUpperCase(), '#ff3b4f'); scKanji('敗北'); ssS('dissonance', {gain:0.5}); ssS('klack', {gain:0.6}); },
+        cam:(D, k) => { const w = (S.lose.length - 1)*0.85 + 1.8; return {p:V3(lerp(-w, w, ssEase(k)), 1.2, CM_LZ - 3.2), l:V3(lerp(-w*0.6, w*0.6, ssEase(k)), 0.75, CM_LZ), fov:46}; }},
+      ...each,
+      {d:2.8, enter(D){ if(D.prev) D.prev.ssPose = 'chained'; scKanji(null); scTitle(S.W.name.toUpperCase(), 'THE WINNERS · ONE OF THE DEFEATED JOINS THEM', S.W.color); ssS('taiko', {gain:0.6}); },
+        cam:(D, k) => ({p:lerpV(V3(1.3, 0.55, CM_LZ + 1.0), V3(0.8, 0.6, CM_LZ + 1.9), ssEase(k)), l:V3(0, 1.75, CM_WZ), fov:52})},
+      {d:5.6, enter(D){ scTitle(null); cmScreens(['WHO WILL', 'YOU PICK?'], `${S.W.name} takes one · ${S.lose.length} in chains`.toUpperCase()); scFlash('#ff2a3a', 0.7, 0, 0.45); ssS('gong', {gain:0.8}); ssS('riser', {gain:0.5}); for(const r of D.los) r.ssPose = 'chainedUp'; },
+        tick(D, k, dt, t){ if(t > 1.3 && !D.q){ D.q = 1; scTitle('WHO WILL YOU PICK?', `${S.W.name} · match #${m.no} · decide in the tournament menu`.toUpperCase(), '#ff3b4f'); scKanji('選択'); ssS('taiko', {gain:0.9}); shake = Math.max(shake, 0.1); } },
+        cam:(D, k) => ({p:lerpV(V3(0, 1.5, CM_WZ + 4.4), V3(0, 2.3, CM_WZ + 1.2), ssEase(k)), l:V3(0, 4.6, -SSF.Z), fov:58})},
+    ])};
+}
+
+/* ---------- Szene 2: Die Wahl wird verkündet ---------- */
+function scCmVerdict(m){
+  const st = SS.st, S0 = m.steal; if(!S0) return null;
+  const S = cmSides(st, m), W = st.teams[S0.to], Lt = st.teams[S0.from], pk = st.players[S0.pick], cap = st.players[S0.captain], you = m.cmBy !== 'captain';
+  const picked = S.lose.filter(i => W.members.includes(i)), rest = S.lose.filter(i => !picked.includes(i)), out = (m.elim || []).filter(i => rest.includes(i));
+  const qualified = W.status === 'qualified', outNames = out.map(i => st.players[i].name).join(' & ');
+  const pLine = (S0.lines || []).find(l => l.side === 'P');
+  return {name:'cm-verdict',
+    setup(D){ cmStage(D, m); D.pk = picked.map(id => D.los[S.lose.indexOf(id)]).filter(Boolean); D.out = out.map(id => D.los[S.lose.indexOf(id)]).filter(Boolean); D.rest = rest.map(id => D.los[S.lose.indexOf(id)]).filter(Boolean);
+      scMood('red'); cmScreens(['…'], `MATCH #${m.no} · THE PICK`); ssS('heartbeat', {gain:0.7}); },
+    cleanup(D){ cmStageOff(D); scClearActors(); ssLobbyScreens(); },
+    shots:cmTicked([
+      {d:3.6, enter(){ const who = you ? 'YOU CHOSE' : `${cap.name.toUpperCase()} CHOSE`;
+          cmScreens([who, `${pk.name.toUpperCase()}.`], `${W.name} · match #${m.no}`.toUpperCase(), '#2fc4e0');
+          scTitle(`${you ? 'You' : cap.name} chose ${pk.name}.`.toUpperCase(), `${W.name} · THE PICK`.toUpperCase(), '#2fc4e0'); scKanji('指名'); ssS('gong', {gain:0.8}); scFlash('#ffffff', 0.45, 0, 0.6); },
+        cam:(D, k) => ({p:lerpV(V3(0, 2.7, CM_WZ + 4.8), V3(0, 2.9, CM_WZ + 3.0), ssEase(k)), l:V3(0, 3.6, -SSF.Z), fov:56})},
+      {d:4.0, enter(D){ scTitle(null); scKanji(null); D.focus = D.pk[0]; for(const r of D.pk) r.ssPose = 'chainedUp'; },
+        tick(D, k, dt, t){
+          if(t > 0.7 && !D.br){ D.br = 1; for(const r of D.pk){ const g = D.rigs.find(x => x.r === r); cmRigOff(g, true); scRevive(r); r.ssPose = 'lookUp'; } scFlash('#2fc4e0', 0.4, 0, 0.35); shake = Math.max(shake, 0.12); ssS('portal', {gain:0.6}); }
+          if(t > 1.9 && !D.tr){ D.tr = 1; D.pk.forEach((r, i) => { const q = r.core.p; emitParticles(q.x, 1, q.z, 40, {speed:3.5, up:2, color:'#2fc4e0', size:0.3, life:0.6, gravity:0, drag:2});
+              const x = (S.win.length - 1)/2*1.5 + 1.5*(i + 1); scPlace(r, x, CM_WZ, Math.PI); r.ssPose = 'crossArms'; emitParticles(x, 1, CM_WZ, 40, {speed:3.5, up:2, color:'#2fc4e0', size:0.3, life:0.6, gravity:0, drag:2}); });
+            scStamp(`→ ${W.name}`, 'blue'); if(pLine) scSub(pLine.who, pLine.text, '#ffffff'); } },
+        cam:(D, k, t) => { const r = D.focus; if(!r) return null; const h = ssHead(r); return D.tr ? {p:V3(h.x - 0.6, 1.9, h.z - 3.4), l:V3(h.x - 1.2, 1.35, h.z), fov:50} : {p:V3(h.x + 0.3, h.y + 0.05, h.z - 1.9), l:V3(h.x, h.y - 0.1, h.z), fov:40}; }},
+      out.length ? {d:6.4, enter(D){ scStamp(null); scSub(null); D.focus = D.out[0]; for(const r of D.out) r.ssPose = 'chained';
+          cmScreens(['THIS MEANS THAT', outNames.toUpperCase(), 'WILL NO LONGER PARTICIPATE'], 'IN THIS TOURNAMENT');
+          scSub('DIRECTOR', `This means that ${outNames} will no longer participate in this tournament.`, '#ff3b4f'); ssS('dissonance', {gain:0.6}); },
+        tick(D, k, dt, t){ if(t > 3.4 && !D.lo){ D.lo = 1; cmScreens(['LOCK OFF!'], outNames.toUpperCase()); scStamp('LOCK OFF!', 'red'); scKanji('脱落'); scFlash('#ff2a3a', 0.6, 0, 0.6); shake = Math.max(shake, 0.2); for(const r of D.out) r.ssPose = 'kneelHands'; } },
+        cam:(D, k) => { const h = ssHead(D.focus); return {p:V3(h.x + 0.4, h.y + 0.1, h.z - 2.2 - k*0.6), l:V3(h.x, h.y - 0.15, h.z), fov:42}; }}
+      : {d:5.6, enter(D){ scStamp(null); scSub(null); for(const r of D.rest) r.ssPose = 'chained';
+          cmScreens(['THE REST OF THE', 'LOSERS TEAM WILL', 'FALL BACK A STAGE.'], `${Lt.name} → ${ssStageName(Lt.members.length)}`.toUpperCase());
+          scSub('DIRECTOR', 'The rest of the losers team will fall back a stage.', '#ff3b4f'); ssS('rumble', {gain:0.5}); },
+        tick(D, k, dt, t){ if(t > 2.8 && !D.dn){ D.dn = 1; scStamp(`↓ ${ssStageName(Lt.members.length)}`, 'red'); for(const r of D.rest) r.ssPose = 'chainedUp'; } },
+        cam:(D, k) => { const xs = D.rest.map(r => r.cmX), cx = xs.length ? xs.reduce((a, b) => a + b, 0)/xs.length : 0; return {p:V3(cx + lerp(-1.4, 1.4, ssEase(k)), 1.3, CM_LZ - 3.6), l:V3(cx, 0.8, CM_LZ), fov:48}; }},
+      ...(qualified ? [{d:4.0, enter(D){ scStamp(null); scSub(null); scMood('gold'); cmScreens([W.name.toUpperCase(), 'PASSED'], `${W.qualNo || st.qualified.length}/${ssTarget(st)}`, '#ffd23f');
+          scTitle(W.name.toUpperCase(), `PASSED · ${W.qualNo || st.qualified.length}/${ssTarget(st)}`, '#ffd23f'); scStamp('PASSED', 'gold'); scKanji('合格'); for(const r of [...D.win, ...D.pk]) r.ssPose = 'celebrate'; },
+        tick(){ if(Math.random() < 0.6) emitParticles((Math.random() - 0.5)*8, 6, CM_WZ + (Math.random() - 0.5)*3, 2, {speed:0.6, up:-1, color:Math.random() < 0.5 ? '#ffd23f' : '#ffffff', size:0.14, life:2.5, gravity:1.2, drag:0.6}); },
+        cam:(D, k) => { const a = -0.6 + k*1.2; return {p:V3(Math.sin(a)*7, 2.4, CM_WZ + Math.cos(a)*7), l:V3(0, 1.3, CM_WZ), fov:50}; }}] : []),
+    ])};
+}
+
+/* ---------- Wildcard-Abschied: Gang mit zwei Türen, welche er nimmt, bleibt offen ---------- */
+function cmCorridor(exitLeft){
+  // Lambert statt Toon: der Toon-Randlichteffekt färbt flach angeschaute Böden und Decken lila
+  const lam = (c) => new THREE.MeshLambertMaterial({color:c});
+  const g = new THREE.Group(), wall = lam('#262d3d'), flo = lam('#14171f'), metal = lam('#363c4a'), Z0 = -3.4, Z1 = 13, HW = 2.3, H = 3.6, mid = (Z0 + Z1)/2, len = Z1 - Z0;
+  const mats = [wall, flo, metal], geos = [];
+  const box = (mat, sx, sy, sz, x, y, z) => { const m = new THREE.Mesh(GEO.box, mat); m.scale.set(sx, sy, sz); m.position.set(x, y, z); g.add(m); return m; };
+  box(flo, 2*HW, 0.02, len, 0, 0.01, mid);
+  for(const s of [-1, 1]) box(wall, 0.25, H, len, s*(HW + 0.12), H/2, mid);
+  box(wall, 2*HW + 0.5, 0.25, len, 0, H + 0.12, mid); box(wall, 2*HW, H, 0.25, 0, H/2, Z0);
+  // Stirnwand mit zwei Türöffnungen (x = ±1.1, 1.3 breit, 2.5 hoch)
+  const DW = 1.3, DH = 2.5, DX = 1.1;
+  box(wall, HW - DX - DW/2, H, 0.25, -(HW + DX + DW/2)/2, H/2, Z1); box(wall, HW - DX - DW/2, H, 0.25, (HW + DX + DW/2)/2, H/2, Z1);
+  box(wall, 2*(DX - DW/2), H, 0.25, 0, H/2, Z1); box(wall, 2*HW, H - DH, 0.25, 0, DH + (H - DH)/2, Z1);
+  const lights = [], strips = [];
+  const glow = (col, o) => { const m = new THREE.MeshBasicMaterial({color:col, transparent:true, opacity:o, toneMapped:false}); mats.push(m); return m; };
+  for(let z = Z0 + 1.6; z < Z1 - 0.6; z += 2.4){ const m = new THREE.Mesh(GEO.box, glow('#dfe9ff', 0.95)); m.scale.set(0.9, 0.03, 0.22); m.position.set(0, H - 0.02, z); g.add(m); lights.push(m); }
+  for(const s of [-1, 1]){ const m = new THREE.Mesh(GEO.box, glow('#2fc4e0', 0.6)); m.scale.set(0.04, 0.03, len - 0.6); m.position.set(s*(HW - 0.05), 0.04, mid); g.add(m); strips.push(m); }
+  const sign = (text, sub, col, x) => {
+    const cv = document.createElement('canvas'); cv.width = 512; cv.height = 160; const c = cv.getContext('2d');
+    c.fillStyle = '#05070b'; c.fillRect(0, 0, 512, 160); c.strokeStyle = col; c.lineWidth = 8; c.strokeRect(6, 6, 500, 148);
+    c.fillStyle = col; c.textAlign = 'center'; c.textBaseline = 'middle'; c.font = 'bold 70px "Dela Gothic One",sans-serif'; c.fillText(text, 256, 66); c.font = 'bold 30px sans-serif'; c.fillText(sub, 256, 128);
+    const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; const mat = new THREE.MeshBasicMaterial({map:tex, toneMapped:false}); mats.push(mat); geos.push(tex);
+    const pl = new THREE.Mesh(new THREE.PlaneGeometry(1.25, 0.39), mat); geos.push(pl.geometry); pl.position.set(x, DH + 0.42, Z1 - 0.14); pl.rotation.y = Math.PI; g.add(pl);
+    // Tür: dunkles Blatt mit Leuchtrahmen in Schildfarbe
+    const leaf = new THREE.Mesh(GEO.box, metal); leaf.scale.set(DW - 0.04, DH - 0.02, 0.08); leaf.position.set(x, DH/2, Z1 + 0.04); g.add(leaf);
+    const knob = new THREE.Mesh(GEO.box, glow('#c9d0dc', 1)); knob.scale.set(0.06, 0.18, 0.06); knob.position.set(x + (x < 0 ? 0.45 : -0.45), 1.05, Z1 - 0.02); g.add(knob);
+    const fr = glow(col, 0.85); for(const [sx, sy, px, py] of [[0.05, DH, x - DW/2, DH/2], [0.05, DH, x + DW/2, DH/2], [DW, 0.05, x, DH]]){ const m = new THREE.Mesh(GEO.box, fr); m.scale.set(sx, sy, 0.04); m.position.set(px, py, Z1 - 0.13); g.add(m); }
+  };
+  const exitX = exitLeft ? -DX : DX;
+  sign('EXIT', '非常口 · OUT', '#3dff8a', exitX); sign('WILDCARD', '敗者復活 · SECOND CHANCE', '#ff9a2a', -exitX);
+  scene.add(g);
+  return {g, Z1, DX, flick(t){ lights.forEach((m, i) => { const f = (Math.sin(t*37 + i*13) > 0.93) || (i === lights.length - 1 && Math.sin(t*9) > 0.5); m.material.opacity = f ? 0.15 : 0.95; }); },
+    dispose(){ scene.remove(g); for(const m of mats) m.dispose(); for(const x of geos) x.dispose && x.dispose(); }};
+}
+function cmCorridorShots(p){
+  const h = Math.imul(p.id + 17, 2654435761) >>> 0, exitLeft = !!(h & 1), goX = (h & 2) ? 1.1 : -1.1, first = p.name.split(' ')[0];
+  const behind = (D) => { const q = D.E && ragdolls.includes(D.E) ? D.E.parts.pelvis.group.position : V3(0, 1, 0); return q; };
+  return [
+    {d:4.8, enter(D){ scStamp(null); scSub(null); scKanji(null); scSpotOff(); scFlash('#000000', 0.6, 0.1);
+        for(const r of [...ragdolls]) if(r !== D.E) removeRagdoll(r);
+        D.cor = cmCorridor(exitLeft); scWalkOn(); scMood('blue');
+        if(D.E){ scRevive(D.E); scPlace(D.E, 0, 0, 0); D.E.ssPose = null; }
+        scTitle(p.name.toUpperCase(), 'LEAVES THE FIELD', '#c9d4e8'); ssS('rumble', {gain:0.4}); ssS('heartbeat', {gain:0.5}); },
+      tick(D, k, dt, t){ if(D.cor) D.cor.flick(t); if(t > 0.6 && D.E) scWalk(D.E, 0, 10.2, true); if(t > 2.2 && !D.t0){ D.t0 = 1; scTitle(null); } },
+      cam:(D, k) => { const q = behind(D); return {p:V3(q.x + 0.55, 1.45, Math.max(-3.0, q.z - 2.7)), l:V3(q.x*0.4, 1.55, 13), fov:50}; }},
+    {d:3.4, enter(D){ ssS('step', {gain:0.4}); },
+      tick(D, k, dt, t){ if(D.cor) D.cor.flick(t + 5); if(D.E) scWalk(D.E, 0, 10.2, true); },
+      cam:(D, k) => { const h0 = D.E ? ssHead(D.E) : V3(0, 1.6, 8); return {p:V3(1.55, 2.2, 12.2), l:V3(h0.x, h0.y - 0.2, h0.z), fov:48}; }},
+    {d:3.6, enter(D){ scKanji('岐路'); scSub(p.name, '…', '#ff8a96'); ssS('heartbeat', {gain:0.8}); if(D.E){ D.E.moveInput.set(0, 0); } },
+      tick(D, k, dt, t){ if(D.cor) D.cor.flick(t + 9); if(D.E){ D.E.wcWalk = true; D.E.moveInput.set(0, 0); D.E.lookYaw = t < 1.1 ? -0.65 : t < 2.3 ? 0.65 : 0; } },
+      cam:(D, k) => { const q = behind(D); return {p:V3(q.x - 0.45, 1.8, q.z - 1.8 - k*0.3), l:V3(0, 1.9, 13), fov:52}; }},
+    {d:2.8, enter(D){ scSub(null); scKanji(null); },
+      tick(D, k, dt, t){ if(D.cor) D.cor.flick(t + 13); if(D.E && t < 1.6) scWalk(D.E, goX, 12.6, true);
+        if(t > 0.9 && !D.bk){ D.bk = 1; scBlack(true); } if(t > 1.7 && !D.dr){ D.dr = 1; ssS('whoomp', {gain:0.7}); ssS('creak', {gain:0.4}); if(D.E){ removeRagdoll(D.E); D.E = null; } } },
+      cam:(D, k) => { const q = behind(D); return {p:V3(q.x*0.5, 0.9, q.z - 2.6), l:V3(0, 1.6, 13), fov:48}; }},
+    {d:3.8, enter(D){ scBlack(false); scTitle('?', `${first} · EXIT OR WILDCARD`.toUpperCase(), '#c9d4e8'); ssS('dissonance', {gain:0.5}); },
+      tick(D, k, dt, t){ if(D.cor) D.cor.flick(t + 17); },
+      cam:(D, k) => ({p:lerpV(V3(0, 1.55, 5.6), V3(0, 1.6, 7.4), ssEase(k)), l:V3(0, 1.7, 13), fov:50})},
+  ];
+}
+const _cmFw = scFarewell;
+scFarewell = function(pid){
+  const S = _cmFw(pid), st = SS.st, p = st && st.players[pid], fw = p && p.fw;
+  if(!S || !S.shots || !fw || fw.how !== 'match' || S.shots.length < 2) return S;
+  if(fw.wc) S.shots.pop();   // die alte Wildcard-Tür verriet die Auswahl
+  const last = S.shots[S.shots.length - 1];
+  last.d = 2.4; last.tick = (D, k, dt, t) => { if(t > 0.5 && !D.st){ D.st = 1; scStamp('ELIMINATED', 'red'); if(D.E) D.E.ssPose = 'slump'; } };
+  S.shots.push(...cmCorridorShots(p));
+  const cl = S.cleanup; S.cleanup = (D, sk) => { scWalkOff(); if(D.cor){ D.cor.dispose(); D.cor = null; } scBlack(false); if(cl) cl(D, sk); };
+  return S;
+};
+
+/* ---------- Szenen einbinden ---------- */
+const _cmScenesFor = ssScenesFor;
+ssScenesFor = function(m, withMatch, before){
+  if(m && m.status === 'await'){ if(m.cmChained && !withMatch) return []; m.cmChained = true; return [scCmChains(m)]; }
+  return _cmScenesFor(m, withMatch, before);
+};
+const _cmAfterSim = ssAfterSim;
+ssAfterSim = function(m, before){
+  if(m && m.status === 'await' && !m.cmChained && SS.fwSim){ const list = ssScenesFor(m, false, before); cmPlayList(list, () => ssToLobby()); return; }
+  return _cmAfterSim(m, before);
+};
+const _cmShowCard = ssShowCard;
+ssShowCard = function(m, inField){
+  if(m && m.status === 'await'){ if(inField) ssToLobby(); else ssRender(); return; }   // zurück ins Turniermenü – gewählt wird dort
+  _cmShowCard(m, inField);
+  const box = document.querySelector('#ss-card .cg-btns');
+  if(box && CM.repeat && CM.undo && CM.undo.id === m.id){ const b = document.createElement('button'); b.className = 'b'; b.textContent = '↻ Repeat fight'; b.title = 'Rewind the tournament to before this match and fight it again'; b.onclick = () => cmRepeat(); box.appendChild(b); }
+};
+function cmPlayList(list, done){
+  list = (list || []).filter(Boolean); if(!list.length){ (done || ssToLobby)(); return; }
+  $('ss').hidden = true; $('ss-card').hidden = true; SS.card = null; for(const r of [...ragdolls]) removeRagdoll(r);
+  battle.phase = 'off'; ctx.mode = 'ss'; document.body.classList.remove('ss-view'); document.body.classList.add('ss');
+  if(MAP.id !== 'bluelock'){ ctx.map = 'bluelock'; loadMap('bluelock'); }
+  setModeHooks({frame:ssFrame, camera:ssCamera});
+  scChain(list, done || (() => ssToLobby()));
+}
+
+/* ---------- Wahl im Turniermenü ---------- */
+function cmPickOpen(id){
+  const st = SS.st, m = st.matches[id]; if(!m || m.status !== 'await') return;
+  if(!m.cmChained){ m.cmChained = true; ssSave(); cmPlayList([scCmChains(m)], () => { ssToLobby(); cmPickOpen(id); }); return; }
+  const {W, L} = cmSides(st, m), P = (i) => st.players[i], A = m.cmAwait;
+  const sealed = (i) => (P(i).sealed || 0) > 0, free = L.members.filter(i => !sealed(i)), pickable = (i) => !sealed(i) || !free.length;
+  let sel = null;
+  const md = $('cm-pick'); md.hidden = false;
+  const stat = (k, v) => `<span class="cm-sb"><i>${k}</i><b style="width:${Math.max(4, Math.min(100, v))}%"></b><em>${v}</em></span>`;
+  const card = (i) => { const p = P(i), k = (A.result.kos || {})[i] || 0;
+    return `<button class="cm-card${pickable(i) ? '' : ' off'}" data-cmp="${i}" ${pickable(i) ? '' : 'disabled'}><span class="ch">⛓</span><b>${ssEsc(p.name)}</b><span class="cm-ovr">${p.ovr}</span>
+      <span class="cm-tg">${ssEsc(SS_EGO[p.ego].label)} · ${ssEsc(SS_ROLES[p.role])}${k ? ` · ${k} K.O.` : ''}${sealed(i) ? ' · sealed' : ''}</span>
+      <span class="cm-sts">${stat('SPD', p.spd || 0)}${stat('STR', p.str || 0)}${stat('RES', p.res || 0)}${stat('CE', p.ce || 0)}${stat('IQ', p.iq || 0)}</span>
+      <span class="cm-mv">${[...(p.moves || []), p.ult].filter(x => ATTACKS[x]).map(x => ssEsc(ATTACKS[x].label || x)).join(' · ')}</span></button>`; };
+  const fate = () => { if(sel == null) return '<span class="hint">Pick a fighter. The winners take them – the rest of the team falls back.</span>';
+    const rest = L.members.filter(i => i !== sel), n = rest.length;
+    if(m.allin) return `<b>${ssEsc(P(sel).name)}</b> joins ${ssEsc(W.name)} first – all or nothing: ${ssEsc(W.name)} then fills up to 5.`;
+    return n <= 1 ? `<b>${ssEsc(P(sel).name)}</b> joins ${ssEsc(W.name)}. This means that <b>${ssEsc(rest.map(i => P(i).name).join(', '))}</b> will no longer participate in this tournament. <b class="cm-lo">LOCK OFF!</b>`
+      : `<b>${ssEsc(P(sel).name)}</b> joins ${ssEsc(W.name)}. The rest (${ssEsc(rest.map(i => P(i).name).join(', '))}) falls back to ${ssEsc(ssStageName(n))}.`; };
+  const draw = () => {
+    md.innerHTML = `<div class="cm-pk" role="dialog" aria-label="Who will you pick?"><div class="cm-ph"><div><small>MATCH #${m.no} · ${ssEsc(m.label)} · ${A.how === 'watch' ? 'watched' : 'simulated'}</small><h2>WHO WILL YOU PICK?</h2>
+      <div class="cm-vs"><b style="--c:${W.color}">${ssEsc(W.name)}</b> beat <b style="--c:${L.color}">${ssEsc(L.name)}</b> · winners: ${W.members.map(i => ssEsc(P(i).name)).join(', ')}</div></div><button class="b" id="cm-px" title="Decide later">✕</button></div>
+      <div class="cm-cards">${L.members.map(card).join('')}</div>
+      <div class="cm-fate">${fate()}</div>
+      <div class="cg-btns"><button class="b hot" id="cm-pok" ${sel == null ? 'disabled' : ''}>${sel == null ? 'Choose a fighter' : `Take ${ssEsc(P(sel).name)}`}</button><button class="b" id="cm-pai">🎲 Let the captain decide</button><button class="b" id="cm-pch">⛓ Replay chain scene</button>${CM.repeat && CM.undo && CM.undo.id === m.id ? '<button class="b" id="cm-prep">↻ Repeat fight</button>' : ''}<button class="b" id="cm-plater">Later</button></div>
+      <p class="hint">Both teams stay locked until you decide. You can keep playing other matches in the meantime.</p></div>`;
+    for(const b of md.querySelectorAll('[data-cmp]')) b.onclick = () => { sel = +b.dataset.cmp; draw(); };
+    md.querySelector('#cm-px').onclick = md.querySelector('#cm-plater').onclick = () => cmPickClose();
+    md.querySelector('#cm-pok').onclick = () => { if(sel != null) cmDecide(m.id, sel); };
+    md.querySelector('#cm-pai').onclick = () => cmDecide(m.id, null);
+    md.querySelector('#cm-pch').onclick = () => { cmPickClose(); cmPlayList([scCmChains(m)], () => { ssToLobby(); cmPickOpen(id); }); };
+    const rp = md.querySelector('#cm-prep'); if(rp) rp.onclick = () => { cmPickClose(); cmRepeat(); };
+    for(const c of md.querySelectorAll('.cm-card')) if(+c.dataset.cmp === sel) c.classList.add('sel');
+  };
+  draw();
+}
+function cmPickClose(){ const md = $('cm-pick'); md.hidden = true; md.innerHTML = ''; }
+function cmDecide(id, pick){
+  const st = SS.st, m = st.matches[id]; if(!m || m.status !== 'await') return;
+  cmPickClose(); const before = st.phase;
+  cmResolve(st, m, pick); SS.lastId = m.id; ssSave();
+  if(m.status !== 'done'){ ssRender(); return; }
+  const list = [scCmVerdict(m), ...ssScenesFor(m, false, before)];
+  cmPlayList(list, () => ssToLobby());
+}
+
+/* ---------- Kampf wiederholen ---------- */
+function cmRepeat(){
+  const U = CM.undo; if(!U) return false; let st; try{ st = JSON.parse(U.json); }catch(e){ return false; }
+  if(SSC.cur){ SSC.cur.onEnd = null; scFinish(true); }
+  cmPause(false); SS.live = null; $('ss-card').hidden = true; SS.card = null; cmPickClose();
+  SS.st = st; SS.lastId = U.lastId; CM.undo = null; ssSave();
+  ssLog(st, `Match #${U.no} is fought again`);
+  const m = st.matches[U.id];
+  if(m && m.status === 'pending') ssWatch(m.id); else ssToLobby();
+  return true;
+}
+
+/* ---------- Pause ---------- */
+function cmPause(on){
+  on = !!on; if(CM.paused === on) return; CM.paused = on; ctx.paused = on;
+  const el = $('cm-pz'); if(el) el.hidden = !on; document.body.classList.toggle('cm-paused', on); cmUi();
+}
+const _cmFrame = ssFrame;
+ssFrame = function(dt){ if(CM.paused) return; return _cmFrame(dt); };
+const _cmUC = updateCutscene;
+updateCutscene = function(dt){ return _cmUC(CM.paused ? 0 : dt); };
+if(typeof updateKillcam === 'function'){ const _cmKC = updateKillcam; updateKillcam = function(dt){ return _cmKC(CM.paused ? 0 : dt); }; }
+const _cmOpenOv = ssOpenOverlay; ssOpenOverlay = function(){ cmPause(false); return _cmOpenOv(); };
+const _cmStop = ssStop; ssStop = function(){ cmPause(false); return _cmStop(); };
+window.addEventListener('keydown', (e) => {
+  if(e.code !== 'KeyP' || !CM.on || !SS.active || !$('ss').hidden || e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target; if(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+  e.preventDefault(); e.stopImmediatePropagation(); cmPause(!CM.paused);
+}, true);
+
+/* ---------- Galerie: Szenen aufzeichnen und identisch wieder abspielen ---------- */
+const GAL = {dbp:null, mem:{scenes:[], states:new Map(), id:0}, lastSid:null, cat:'all', tour:null};
+const galTour = (st) => (st.seed >>> 0).toString(36);
+function galDb(){
+  if(GAL.dbp) return GAL.dbp;
+  GAL.dbp = new Promise((res) => { try{ const rq = indexedDB.open('ra-scene-gallery', 1);
+    rq.onupgradeneeded = () => { const d = rq.result; if(!d.objectStoreNames.contains('scenes')) d.createObjectStore('scenes', {keyPath:'id', autoIncrement:true}); if(!d.objectStoreNames.contains('states')) d.createObjectStore('states', {keyPath:'id'}); };
+    rq.onsuccess = () => res(rq.result); rq.onerror = () => res(null); rq.onblocked = () => res(null); }catch(e){ res(null); } });
+  return GAL.dbp;
+}
+function galReq(store, mode, fn){
+  return galDb().then((d) => new Promise((res) => {
+    if(!d) return res(fn(null));
+    try{ const tx = d.transaction(store, mode), os = tx.objectStore(store), rq = fn(os); let out; if(rq && 'onsuccess' in rq) rq.onsuccess = () => { out = rq.result; }; tx.oncomplete = () => res(out); tx.onerror = tx.onabort = () => res(undefined); }catch(e){ res(undefined); }
+  }));
+}
+const galAll = () => galReq('scenes', 'readonly', (os) => os ? os.getAll() : null).then((r) => r || GAL.mem.scenes.slice());
+const galState = (sid) => galReq('states', 'readonly', (os) => os ? os.get(sid) : null).then((r) => (r && r.json) || GAL.mem.states.get(sid) || null);
+function galPut(e, json){
+  if(json != null) galReq('states', 'readwrite', (os) => { if(!os){ GAL.mem.states.set(e.sid, json); return null; } return os.put({id:e.sid, json}); });
+  return galReq('scenes', 'readwrite', (os) => { if(!os){ e.id = ++GAL.mem.id; GAL.mem.scenes.push(e); return null; } return os.add(e); });
+}
+async function galDelete(ids){
+  const all = await galAll(), gone = new Set(ids), keep = all.filter(e => !gone.has(e.id)), sids = new Set(keep.map(e => e.sid));
+  const drop = [...new Set(all.filter(e => gone.has(e.id)).map(e => e.sid))].filter(s => !sids.has(s));
+  await galReq('scenes', 'readwrite', (os) => { if(!os){ GAL.mem.scenes = GAL.mem.scenes.filter(e => !gone.has(e.id)); return null; } for(const id of gone) os.delete(id); return null; });
+  await galReq('states', 'readwrite', (os) => { if(!os){ for(const s of drop) GAL.mem.states.delete(s); return null; } for(const s of drop) os.delete(s); return null; });
+  if(drop.includes(GAL.lastSid)) GAL.lastSid = null;
+}
+const GAL_CAT = {ceremony:['🎬', '#ffd23f', 'Ceremonies'], match:['⚔', '#2fc4e0', 'Match intros'], steal:['🔁', '#3f8cff', 'Steals'], farewell:['🚪', '#ff5a6a', 'Farewells'], wildcard:['🔥', '#ff9a2a', 'Wildcard'], twist:['🌀', '#b04aff', 'Plot twists'], content:['⛓', '#ff3b4f', 'Your picks'], inter:['☕', '#5dff9b', 'Intermissions']};
+function galLabel(fn, args, st){
+  const m = args.find(a => a && a.ra), M = (x) => x && x.no != null ? `#${x.no}` : '', T = (id) => st.teams[id] ? st.teams[id].name : '?', P = (id) => st.players[id] ? st.players[id].name : '?';
+  const vs = m ? `${T(m.a)} vs ${T(m.b)}` : '';
+  switch(fn){
+    case 'scIntro': return ['ceremony', 'Intro', 'The Second Selection begins'];
+    case 'scMatchIntro': return ['match', `Match ${M(m)} · intro`, `${vs} · ${m.label}`];
+    case 'scSteal': return ['steal', `Steal · match ${M(m)}`, m.steal ? `${T(m.steal.to)} takes ${P(m.steal.pick)}` : vs];
+    case 'scKoResult': return ['match', `${m.label} · ${M(m)}`, `${T(m.winner === 'a' ? m.a : m.b)} advances`];
+    case 'scFarewell': return ['farewell', `Farewell · ${P(args[0])}`, (st.players[args[0]] && st.players[args[0]].fw && st.players[args[0]].fw.how === 'cut') ? 'Final cut' : 'Eliminated'];
+    case 'scCut': return ['ceremony', 'Final Cut', `${(st.cut || []).length} eliminated`];
+    case 'scChampion': return ['ceremony', 'Award Ceremony', st.champion != null ? T(st.champion) : ''];
+    case 'scWcLineup': return ['wildcard', 'Wildcard · lineup', `${st.wc ? st.wc.order.length : '?'} get a second chance`];
+    case 'scWcIntro': return ['wildcard', `Wildcard · ${m.label}`, vs];
+    case 'scWcResult': return ['wildcard', `Wildcard · door ${m.wcDoor || '?'}`, `${P(m.wcWin)} wins`];
+    case 'scWcChampion': return ['wildcard', 'Wildcard · winner', st.wc ? P(st.wc.champ) : ''];
+    case 'scWcDuelResult': return ['wildcard', 'Wildcard · duel result', `${P(m.wcWin)} wins`];
+    case 'twScene': return ['twist', 'Plot twist', st.tw && typeof TW_INFO !== 'undefined' && TW_INFO[st.tw.id] ? (TW_INFO[st.tw.id].name || st.tw.id) : ''];
+    case 'twHdResult': return ['twist', 'Duel of honor', vs];
+    case 'imScene': return ['inter', `Intermission · before ${M(m)}`, vs];
+    case 'scCmChains': { const S = cmSides(st, m); return ['content', `Who will you pick? · ${M(m)}`, `${S.L.name} in chains`]; }
+    case 'scCmVerdict': return ['content', `${m.cmBy === 'captain' ? 'The captain chose' : 'You chose'} ${m.steal ? P(m.steal.pick) : '?'}`, `Match ${M(m)} · ${(m.elim || []).length ? 'LOCK OFF' : 'falls back a stage'}`];
+  }
+  return ['ceremony', fn, ''];
+}
+function galRecord(S){
+  const st = SS.st; if(!st || !S.rec) return;
+  let json; try{ json = JSON.stringify(st); }catch(e){ return; }
+  const tour = galTour(st), sid = `${tour}:${st.seq}:${json.length}`;
+  let lab; try{ lab = galLabel(S.rec.fn, S.rec.argsLive || [], st); }catch(e){ lab = ['ceremony', S.name, '']; }
+  const e = {tour, t:Date.now(), name:S.name, fn:S.rec.fn, args:S.rec.args, seed:S.rec.seed, sid, cat:lab[0], title:lab[1], sub:lab[2], champ:st.phase};
+  galPut(e, sid === GAL.lastSid ? null : json); GAL.lastSid = sid;
+}
+const cmArgOut = (a) => a && typeof a === 'object' ? (Array.isArray(a.ra) && a.id != null ? {m:a.id} : (a.players && a.teams) ? {st:1} : null) : a;
+// Fabriken markieren: Name, Argumente und Zufalls-Seed, damit die Wiedergabe identisch ist
+function cmTagFactory(name, f){
+  if(typeof f !== 'function') return f;
+  return function(...a){
+    if(name === 'twScene' && a[1]) return f.apply(this, a);   // Live-Twists gehören zum laufenden Kampf
+    const seed = CM.seed != null ? CM.seed : (Math.random()*4294967296) >>> 0; CM.seed = null;
+    const S = cmSeeded(seed, () => f.apply(this, a));
+    if(S && S.shots){ S.rec = {fn:name, args:a.map(cmArgOut), argsLive:a, seed};
+      S.shots.forEach((sh, i) => { if(sh.enter){ const e0 = sh.enter; sh.enter = function(D){ return cmSeeded(seed + i + 1, () => e0.call(this, D)); }; } }); }
+    return S;
+  };
+}
+scIntro = cmTagFactory('scIntro', scIntro); scMatchIntro = cmTagFactory('scMatchIntro', scMatchIntro); scSteal = cmTagFactory('scSteal', scSteal); scKoResult = cmTagFactory('scKoResult', scKoResult);
+scFarewell = cmTagFactory('scFarewell', scFarewell); scCut = cmTagFactory('scCut', scCut); scChampion = cmTagFactory('scChampion', scChampion);
+scWcLineup = cmTagFactory('scWcLineup', scWcLineup); scWcIntro = cmTagFactory('scWcIntro', scWcIntro); scWcResult = cmTagFactory('scWcResult', scWcResult); scWcChampion = cmTagFactory('scWcChampion', scWcChampion); scWcDuelResult = cmTagFactory('scWcDuelResult', scWcDuelResult);
+twScene = cmTagFactory('twScene', twScene); twHdResult = cmTagFactory('twHdResult', twHdResult); imScene = cmTagFactory('imScene', imScene);
+scCmChains = cmTagFactory('scCmChains', scCmChains); scCmVerdict = cmTagFactory('scCmVerdict', scCmVerdict);
+const CM_FACT = {scIntro:(...a) => scIntro(...a), scMatchIntro:(...a) => scMatchIntro(...a), scSteal:(...a) => scSteal(...a), scKoResult:(...a) => scKoResult(...a), scFarewell:(...a) => scFarewell(...a), scCut:(...a) => scCut(...a), scChampion:(...a) => scChampion(...a),
+  scWcLineup:(...a) => scWcLineup(...a), scWcIntro:(...a) => scWcIntro(...a), scWcResult:(...a) => scWcResult(...a), scWcChampion:(...a) => scWcChampion(...a), scWcDuelResult:(...a) => scWcDuelResult(...a),
+  twScene:(...a) => twScene(...a), twHdResult:(...a) => twHdResult(...a), imScene:(...a) => imScene(...a), scCmChains:(...a) => scCmChains(...a), scCmVerdict:(...a) => scCmVerdict(...a)};
+const _cmScPlay = scPlay;
+scPlay = function(S, onEnd){
+  if(S && S.rec && !CM.replay && SS.active && SS.st){ try{ galRecord(S); }catch(e){ console.warn('Gallery', e); } }
+  return _cmScPlay(S, onEnd);
+};
+// Während einer Wiedergabe wird nichts gespeichert (der echte Turnierstand ist zur Seite gelegt)
+const _cmSave = ssSave; ssSave = function(){ if(CM.replay) return; return _cmSave.apply(this, arguments); };
+async function galPlay(id){
+  const e = (await galAll()).find(x => x.id === id); if(!e) return;
+  const json = await galState(e.sid); let snap = null; try{ snap = JSON.parse(json); }catch(err){}
+  if(!snap){ galMsg('This scene’s saved state is missing.'); return; }
+  const real = SS.st; galClose(); cmPause(false);
+  if(SSC.cur){ SSC.cur.onEnd = null; scFinish(true); }
+  CM.replay = {real}; SS.st = snap;
+  let S = null;
+  try{
+    const args = (e.args || []).map(a => a && typeof a === 'object' ? (a.m != null ? snap.matches[a.m] : a.st ? snap : null) : a);
+    $('ss').hidden = true; $('ss-card').hidden = true; SS.card = null; scClearActors(); battle.phase = 'off'; ctx.mode = 'ss';
+    document.body.classList.remove('ss-view'); document.body.classList.add('ss'); setModeHooks({frame:ssFrame, camera:ssCamera});
+    const m = args.find(a => a && a.ra);
+    ssArena(!!(m && (m.kind === 'wc' || m.kind === 'wcd')));
+    if(m) for(const [team, ids] of [['red', m.ra], ['blue', m.rb]]) ids.forEach((pid, i) => { const f = snap.players[pid]; if(!f) return; const sp = mapSpawn(team, i, ids.length); scActor(f, sp.x, sp.z, sp.yaw, team); });
+    CM.seed = e.seed; S = CM_FACT[e.fn] ? CM_FACT[e.fn](...args) : null;
+  }catch(err){ console.warn('Gallery replay', err); S = null; }
+  CM.seed = null;
+  if(!S){ galEnd(); galMsg('This scene can no longer be played.'); return; }
+  scPlay(S, () => galEnd());
+}
+function galEnd(){ const R = CM.replay; if(!R) return; CM.replay = null; SS.st = R.real; scClearActors(); ssToLobby(); galOpen(); }
+
+/* ---------- Galerie-Oberfläche ---------- */
+function galMsg(t){ const el = document.querySelector('#cm-gal .cm-gmsg'); if(el){ el.textContent = t; } else if(typeof showBanner === 'function') showBanner(t, 'crimson'); }
+function galClose(){ const md = $('cm-gal'); md.hidden = true; md.innerHTML = ''; }
+async function galOpen(){
+  const md = $('cm-gal'); md.hidden = false; md.innerHTML = '<div class="cm-g"><p class="hint" style="color:#ccc">Loading…</p></div>';
+  const all = await galAll(), cur = SS.st ? galTour(SS.st) : null;
+  const tours = [...new Set(all.map(e => e.tour))]; if(cur && !tours.includes(cur)) tours.unshift(cur);
+  if(!GAL.tour || !tours.includes(GAL.tour)) GAL.tour = cur || tours[0];
+  const list = all.filter(e => e.tour === GAL.tour).sort((a, b) => a.t - b.t), cats = Object.keys(GAL_CAT).filter(c => list.some(e => e.cat === c));
+  if(GAL.cat !== 'all' && !cats.includes(GAL.cat)) GAL.cat = 'all';
+  const shown = list.map((e, i) => Object.assign({n:i + 1}, e)).filter(e => GAL.cat === 'all' || e.cat === GAL.cat);
+  const tm = (t) => { const d = new Date(t); return d.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'}); };
+  md.innerHTML = `<div class="cm-g" role="dialog" aria-label="Cutscene gallery">
+    <div class="cm-gh"><b>🎞 CUTSCENE GALLERY</b><select id="cm-gt" class="mapsel">${tours.map(t => `<option value="${t}" ${t === GAL.tour ? 'selected' : ''}>${t === cur ? 'Current tournament' : `Tournament ${t}`} (${all.filter(e => e.tour === t).length})</option>`).join('')}</select><span class="cm-gn">${list.length} scene${list.length === 1 ? '' : 's'}</span><button class="b" id="cm-gx">✕</button></div>
+    <div class="cm-gf"><button class="b${GAL.cat === 'all' ? ' on' : ''}" data-gcat="all">All</button>${cats.map(c => `<button class="b${GAL.cat === c ? ' on' : ''}" data-gcat="${c}">${GAL_CAT[c][0]} ${GAL_CAT[c][2]} (${list.filter(e => e.cat === c).length})</button>`).join('')}</div>
+    <div class="cm-gl">${shown.map(e => { const C = GAL_CAT[e.cat] || GAL_CAT.ceremony; return `<div class="cm-gc" style="--c:${C[1]}"><i>${C[0]}</i><div><b>${ssEsc(e.title)}</b><span>${ssEsc(e.sub || '')}</span><em>#${e.n} · ${tm(e.t)}</em></div><button class="b hot" data-gp="${e.id}">▶ Play</button><button class="b" data-gd="${e.id}" title="Remove this scene from the gallery">🗑</button></div>`; }).join('') || '<p class="hint" style="color:#ccc">No scenes saved yet. Every tournament cutscene you see from now on is saved here and can be watched again exactly the same way.</p>'}</div>
+    <div class="cm-gb"><button class="b" id="cm-greset" ${list.length ? '' : 'disabled'}>Reset gallery</button><small>Deletes the saved scenes of this tournament. New cutscenes keep being saved.</small><span class="cm-gmsg"></span></div></div>`;
+  md.querySelector('#cm-gx').onclick = () => galClose();
+  md.querySelector('#cm-gt').onchange = (ev) => { GAL.tour = ev.target.value; galOpen(); };
+  for(const b of md.querySelectorAll('[data-gcat]')) b.onclick = () => { GAL.cat = b.dataset.gcat; galOpen(); };
+  for(const b of md.querySelectorAll('[data-gp]')) b.onclick = () => galPlay(+b.dataset.gp);
+  for(const b of md.querySelectorAll('[data-gd]')) b.onclick = async () => { await galDelete([+b.dataset.gd]); galOpen(); };
+  let arm = 0; const rs = md.querySelector('#cm-greset');
+  rs.onclick = async () => { if(performance.now() - arm < 4000){ await galDelete(list.map(e => e.id)); galOpen(); return; } arm = performance.now(); rs.textContent = 'Really? Click again'; };
+}
+
+/* ---------- Turniermenü ---------- */
+function cmUi(){
+  const t = $('cm-toggle'); if(t){ t.textContent = `🎬 Content Mode: ${CM.on ? 'ON' : 'OFF'}`; t.setAttribute('aria-pressed', String(CM.on)); t.classList.toggle('hot', CM.on); }
+  document.body.classList.toggle('cm-on', CM.on);
+  const pb = $('cm-pause'); if(pb){ pb.hidden = !(CM.on && SS.active && $('ss').hidden && !CM.replay); pb.textContent = CM.paused ? '▶' : '⏸'; pb.title = CM.paused ? 'Continue (P)' : 'Pause (P)'; }
+  const rb = $('cm-restart'); if(rb) rb.hidden = !(CM.repeat && SS.live);
+}
+(function(){
+  const css = document.createElement('style'); css.textContent = `
+#cm-pause{position:fixed;right:14px;top:calc(14px + env(safe-area-inset-top,0px));z-index:98;width:46px;height:46px;border-radius:50%;border:3px solid #000;background:#eef0f7;color:#0d0b14;font:900 20px/1 var(--f-body,system-ui);cursor:pointer;box-shadow:3px 3px 0 #000}
+#cm-pause[hidden]{display:none}
+#cm-pz{position:fixed;inset:0;z-index:97;background:rgba(6,8,14,.5);display:flex;align-items:center;justify-content:center;backdrop-filter:grayscale(.7)}
+#cm-pz[hidden]{display:none}
+#cm-pz>div{display:flex;flex-direction:column;align-items:center;gap:10px;color:#fff;text-align:center}
+#cm-pz b{font:900 clamp(48px,10vw,120px)/1 "Dela Gothic One",serif;letter-spacing:.06em;-webkit-text-stroke:2px #000;text-shadow:6px 6px 0 #ff3b4f}
+#cm-pz span{font:700 13px var(--f-mono,monospace);letter-spacing:.2em;color:#cfd6e4}
+#cm-pick,#cm-gal{position:fixed;inset:0;z-index:77;background:rgba(6,4,10,.72);display:flex;align-items:center;justify-content:center;padding:14px}
+#cm-pick[hidden],#cm-gal[hidden]{display:none}
+.cm-pk,.cm-g{width:min(1000px,100%);max-height:calc(100vh - 28px);overflow-y:auto;background:#0d0b14;color:#fff;border:3px solid #ff3b4f;box-shadow:0 0 0 3px #000,0 0 46px rgba(255,59,79,.35);padding:16px;display:flex;flex-direction:column;gap:12px}
+.cm-ph{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.cm-ph small{font:700 11px var(--f-mono,monospace);letter-spacing:.16em;color:#ff8a96}
+.cm-pk h2{margin:4px 0;font:900 clamp(30px,5.4vw,58px)/1 "Dela Gothic One",serif;color:#fff;-webkit-text-stroke:1.5px #000;text-shadow:4px 4px 0 #ff3b4f}
+.cm-vs{font-size:13px;color:#cfd6e4}.cm-vs b{color:var(--c);text-shadow:0 0 1px #000}
+.cm-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.cm-card{position:relative;display:flex;flex-direction:column;gap:5px;text-align:left;padding:12px 12px 10px;background:repeating-linear-gradient(135deg,#17141f 0 10px,#120f19 10px 20px);color:#fff;border:2px dashed #8d93a0;cursor:pointer;font:inherit;transition:transform .12s,box-shadow .12s}
+.cm-card:hover{transform:translateY(-2px);box-shadow:0 0 0 2px #ff3b4f}
+.cm-card.sel{border:3px solid #2fc4e0;box-shadow:0 0 22px rgba(47,196,224,.6);background:#0f1a24}
+.cm-card.off{opacity:.45;cursor:not-allowed}
+.cm-card .ch{position:absolute;right:10px;top:8px;font-size:22px;opacity:.85}
+.cm-card.sel .ch{opacity:.2}
+.cm-card>b{font:900 17px/1.1 "Dela Gothic One",serif;padding-right:28px}
+.cm-ovr{font:900 30px/1 var(--f-mono,monospace);color:#ffd23f}
+.cm-tg{font:700 10px var(--f-mono,monospace);letter-spacing:.08em;color:#ff8a96;text-transform:uppercase}
+.cm-sts{display:flex;flex-direction:column;gap:2px}
+.cm-sb{display:grid;grid-template-columns:30px 1fr 24px;gap:6px;align-items:center;font:700 10px var(--f-mono,monospace);color:#aab}
+.cm-sb b{display:block;height:6px;background:linear-gradient(90deg,#2fc4e0,#7fe6ff)}.cm-sb em{font-style:normal;text-align:right;color:#fff}
+.cm-mv{font-size:10px;color:#8d93a0;line-height:1.3}
+.cm-fate{padding:10px 12px;border-left:4px solid #ff3b4f;background:#1a0d12;font-size:14px;min-height:20px}
+.cm-lo{color:#ff3b4f;letter-spacing:.06em}
+.cm-pk .hint,.cm-g .hint{color:#9aa}
+.cm-gh{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.cm-gh>b{font:900 22px/1 "Dela Gothic One",serif;text-shadow:3px 3px 0 #ff3b4f;margin-right:auto}
+.cm-gn{font:700 11px var(--f-mono,monospace);color:#aab}
+.cm-gf{display:flex;gap:6px;flex-wrap:wrap}.cm-gf .b.on{background:#ff3b4f;color:#fff}
+.cm-gl{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px}
+.cm-gc{display:grid;grid-template-columns:34px 1fr auto auto;gap:8px;align-items:center;padding:8px 10px;background:#15121d;border-left:5px solid var(--c)}
+.cm-gc>i{font-style:normal;font-size:22px;text-align:center}
+.cm-gc b{display:block;font-size:13px}.cm-gc span{display:block;font-size:11px;color:#bbc}.cm-gc em{display:block;font:700 10px var(--f-mono,monospace);color:#778;font-style:normal}
+.cm-gb{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.cm-gb small{color:#99a;font-size:11px}.cm-gmsg{color:#ff8a96;font-size:12px}
+body.cm-on #ss-mlabel::before{content:"🎬 CONTENT · ";color:#ff3b4f}
+.cm-panel{border:3px solid #ff3b4f;background:#1a0d12;color:#fff;padding:10px 12px;margin-bottom:10px;display:flex;flex-direction:column;gap:6px}
+.cm-panel>b{font:900 18px/1 "Dela Gothic One",serif;text-shadow:2px 2px 0 #ff3b4f}.cm-panel .hint{color:#cbb}
+.cm-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px;padding:4px 0;border-top:1px dashed rgba(255,255,255,.15)}
+.cm-row>span{font:700 11px var(--f-mono,monospace);color:#ff8a96}.cm-row>button{margin-left:auto}
+.cm-rep{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;font-size:13px}
+.ss-m.await{box-shadow:inset 4px 0 0 #ff3b4f}
+@media (max-width:640px){.cm-gc{grid-template-columns:28px 1fr auto}.cm-gc [data-gd]{grid-column:3}}
+`; document.head.appendChild(css);
+  const mk = (tag, id, html) => { const el = document.createElement(tag); el.id = id; if(html) el.innerHTML = html; document.body.appendChild(el); return el; };
+  const pb = mk('button', 'cm-pause'); pb.hidden = true; pb.setAttribute('aria-label', 'Pause'); pb.onclick = () => cmPause(!CM.paused);
+  const pz = mk('div', 'cm-pz', '<div><b>PAUSED</b><span>CONTENT MODE · PRESS P TO CONTINUE</span><button class="b hot" id="cm-resume">▶ Continue</button></div>'); pz.hidden = true;
+  pz.querySelector('#cm-resume').onclick = () => cmPause(false);
+  mk('div', 'cm-pick').hidden = true; mk('div', 'cm-gal').hidden = true;
+  // Knöpfe im Turniermenü
+  const ref = document.getElementById('ss-intro');
+  if(ref){ const tg = document.createElement('button'); tg.className = 'b'; tg.id = 'cm-toggle'; tg.title = 'Pause anytime and pick the stolen player yourself after every steal match';
+    tg.onclick = () => { CM.on = !CM.on; try{ localStorage.setItem('ss-content', CM.on ? '1' : '0'); }catch(e){} if(!CM.on && SS.st && cmAwaiting(SS.st).length){ cmFlushAll(); } cmUi(); ssRender(); };
+    const gb = document.createElement('button'); gb.className = 'b'; gb.id = 'cm-gal-btn'; gb.textContent = '🎞 Cutscene Gallery'; gb.title = 'Watch every cutscene of the tournament again'; gb.onclick = () => galOpen();
+    ref.after(tg, gb); }
+  const opts = document.querySelector('.ss-opts');
+  if(opts){ const l = document.createElement('label'); l.className = 'chk'; l.innerHTML = '<input type="checkbox" id="cm-rep-opt"> Offer “↻ Repeat fight” (rewinds the tournament to before the last match)';
+    const sa = opts.querySelector('.sa-opt'); if(sa) opts.insertBefore(l, sa); else opts.appendChild(l);
+    const cb = l.querySelector('input'); cb.checked = CM.repeat; cb.onchange = () => { CM.repeat = cb.checked; try{ localStorage.setItem('ss-repeat', CM.repeat ? '1' : '0'); }catch(e){} cmUi(); ssRender(); }; }
+  // Neustart während eines Kampfes
+  const top = document.getElementById('ss-hud-back');
+  if(top){ const b = document.createElement('button'); b.className = 'b'; b.id = 'cm-restart'; b.textContent = '↻ Restart'; b.title = 'Start this fight over'; b.hidden = true;
+    b.onclick = () => { const L = SS.live; if(!L) return; const id = L.id; cmPause(false); ssAbortWatch(); ssWatch(id); }; top.before(b); }
+  const w = $('ss-watch'); if(w) w.onclick = () => { const st = SS.st, aw = cmAwaiting(st); if(!ssNext(st) && aw.length) cmPickOpen(aw[0].id); else ssWatch(null); };
+  setInterval(cmUi, 300); cmUi();
+})();
+const _cmOverview = ssOverviewHtml;
+ssOverviewHtml = function(){
+  const st = SS.st, aw = cmAwaiting(st); let h = '';
+  if(aw.length) h += `<div class="cm-panel"><b>⛓ WHO WILL YOU PICK?</b><span class="hint">${aw.length} decision${aw.length > 1 ? 's' : ''} open · both teams stay locked until you choose</span>${aw.map(m => { const {W, L} = cmSides(st, m); return `<div class="cm-row"><span>#${m.no}</span><b style="color:${W.color}">${ssEsc(W.name)}</b> beat <b style="color:${L.color}">${ssEsc(L.name)}</b> <small class="hint">${ssEsc(m.label)}</small><button class="b hot" data-cmpick="${m.id}">Choose ▶</button></div>`; }).join('')}<div class="cg-btns"><button class="b" data-cmauto="1">🎲 Let the captains decide all</button></div></div>`;
+  const U = CM.undo, um = U && st.matches[U.id];
+  if(CM.repeat && U && um && SS.lastId === U.id) h += `<div class="cm-rep">↻ <span>Last fight: <b>#${U.no}</b> ${ssEsc(ssT(um.a).name)} vs ${ssEsc(ssT(um.b).name)}</span><button class="b" data-cmrep="1">Repeat fight</button></div>`;
+  return h + _cmOverview();
+};
+const _cmTeamCard = ssTeamCard;
+ssTeamCard = function(T){ const h = _cmTeamCard(T); return T.status === 'scheduled' && cmAwaiting(SS.st).some(m => m.a === T.id || m.b === T.id) ? h.replace(' · playing', ' · ⛓ waiting for your pick') : h; };
+const _cmRender = ssRender;
+ssRender = function(){
+  const out = _cmRender.apply(this, arguments);
+  const st = SS.st; if(!st) return out;
+  const aw = cmAwaiting(st), next = ssNext(st), w = $('ss-watch');
+  if(w && !next && aw.length){ w.disabled = false; w.textContent = `⛓ Pick for match #${aw[0].no}`; }
+  const body = $('ss-body');
+  for(const b of body.querySelectorAll('[data-cmpick]')) b.onclick = () => cmPickOpen(+b.dataset.cmpick);
+  for(const b of body.querySelectorAll('[data-cmauto]')) b.onclick = () => { const list = cmAwaiting(SS.st); for(const m of list) cmResolve(SS.st, m, null); if(list.length) SS.lastId = list[list.length - 1].id; ssSave(); ssLobbyScreens(); ssRender(); };
+  for(const b of body.querySelectorAll('[data-cmrep]')) b.onclick = () => cmRepeat();
+  if(SS.tab === 'matches') for(const el of body.querySelectorAll('.ss-m.await')){ const no = +(el.querySelector('.ss-mno') || {}).textContent.replace('#', ''), m = aw.find(x => x.no === no); if(!m) continue;
+    const s = el.querySelector('.ss-st'); if(s){ s.textContent = '⛓ waiting for your pick'; s.className = 'ss-st live'; }
+    const a = document.createElement('div'); a.className = 'ss-acts'; a.innerHTML = `<button class="b hot">Choose</button>`; a.firstChild.onclick = () => cmPickOpen(m.id); el.appendChild(a); }
+  cmUi();
+  return out;
+};
+try{ Object.assign(window.__arena, {CM, cmResolve, cmPickOpen, cmDecide, cmRepeat, cmPause, cmAwaiting, galOpen, galPlay, galAll, scCmChains, scCmVerdict, cmCorridor, cmPlayList, cmFarewell:(...a) => scFarewell(...a), ssCheck:(...a) => ssCheck(...a)}); }catch(e){}
+
 requestAnimationFrame(frame);
 } // startGame
 </script>

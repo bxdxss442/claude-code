@@ -20,3 +20,13 @@ Name, Körperbasis, Ego-Typ, Rolle, die fünf Werte, drei Techniken + Ultimate,
 Farben, Extras, Skins, Fluchgegenstände und Begleiter. Gespeichert wird in der
 Favoriten-Bibliothek; „Save & insert“ ersetzt einen Kämpfer des laufenden
 Turniers, über „Neue Saison“ lassen sich die Figuren ebenfalls importieren.
+
+## Content Mode, Cutscene Gallery & Repeat Fight (Second Selection)
+
+- **🎬 Content Mode** (button in the tournament menu):
+  - **Pause anytime** with ⏸ (top right) or the P key. Fights, finishers and cutscenes freeze.
+  - **You pick the steal.** After every steal match, the defeated team is shown in chains and the screens ask "Who will you pick?". Then you return to the menu. Both teams stay locked until you choose under "⛓ Who will you pick?" in the overview.
+  - **The pick is announced.** A scene shows "You chose …", followed by either "The rest of the losers team will fall back a stage." or "This means that … will no longer participate in this tournament. LOCK OFF!".
+- **🎞 Cutscene Gallery**: Every tournament cutscene is saved together with the tournament state (IndexedDB), so it replays exactly as it first played. You can delete single scenes or reset the whole gallery.
+- **↻ Repeat fight** (option in the settings): Rewinds the tournament to before the last match so you can fight it again. It is offered on the result card, in the overview, on the pick screen, and as "↻ Restart" during a fight.
+- **Wildcard farewell**: Eliminated fighters walk down a corridor with two doors, EXIT and WILDCARD. The scene cuts away before you see which door they take.
