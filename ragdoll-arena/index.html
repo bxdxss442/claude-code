@@ -22462,6 +22462,141 @@ kdOpen = function(id, cmpId){
 };
 try{ Object.assign(window.__arena, {scGacha, gcPlay, gcRadarCanvas, GC_TIER}); }catch(e){}
 
+
+
+/* ================= Werte mit Gewicht (v61) ================= */
+// Die fünf Werte prägen jetzt deutlich, wie ein Kämpfer kämpft. Kurven: 20 → schwach, 60 → Durchschnitt (1,0), 99 → Spitze.
+// Dazu Schwellen mit eigenen Eigenschaften:
+//  SPD  Lauftempo 0,62–1,42× · Dash schneller/kürzer abklingend · unter 40: KEIN Dash · ab 80: Nachbilder bei hohem Tempo und beim Dash
+//  STR  physischer Schaden 0,62–1,50× · ab 70: Wucht (zusätzlicher Rückstoß) · ab 85: Brecher (Treffer lassen den Boden beben, Block wird durchbrochen)
+//  RES  Leben 0,70–1,45× · Betäubungen 1,35–0,60× · ab 80: Eiserner Körper (ignoriert die Hälfte aller leichten Betäubungen) · unter 40: liegt länger am Boden
+//  CE   Fluchtechnik-Schaden 0,65–1,45× · Abklingzeiten 1,35–0,70× · CE-Regeneration 0,45–1,9× · ab 85: Fluchenergie-Ausbruch bei jeder Technik
+//  INT  Reaktion, Lesen, Fehler und Timing stark gespreizt · unter 40: verpasst Abwehrchancen · ab 80: liest Angriffe (mehr Blocks/Ausweichen)
+const stCurve = (v, lo, hi) => { v = Math.max(1, Math.min(99, v)); return v < 60 ? 1 - (60 - v)/40*(1 - lo) : 1 + (v - 60)/39*(hi - 1); };
+const ST_TRAIT = {
+  spd:[[0, 39, 'No dash – visibly slower'], [80, 99, 'Afterimages at top speed']],
+  str:[[70, 84, 'Heavy blows (extra knockback)'], [85, 99, 'Crusher: shockwaves, breaks guards']],
+  res:[[0, 39, 'Stays down longer'], [80, 99, 'Iron Body: shrugs off light stuns']],
+  ce:[[0, 39, 'Slow cursed energy recovery'], [85, 99, 'Cursed bursts on every technique']],
+  iq:[[0, 39, 'Misses chances to defend'], [80, 99, 'Reads attacks: blocks and dodges far more']],
+};
+const stTraits = (f) => ST_KEYS.flatMap(k => (ST_TRAIT[k] || []).filter(([a, b]) => (f[k] || 0) >= a && (f[k] || 0) <= b).map(([, , t]) => ({k, t})));
+Object.assign(ST_INFO.spd, {desc:'Running speed 0.62–1.42×, dash and getting up. Below 40: cannot dash at all. From 80: leaves afterimages at top speed.'});
+Object.assign(ST_INFO.str, {desc:'Physical damage 0.62–1.5×. From 70: extra knockback. From 85: crushing blows that shake the ground and break guards.'});
+Object.assign(ST_INFO.res, {desc:'Health 0.7–1.45×, stuns 1.35–0.6× as long. Below 40: stays down longer. From 80: Iron Body ignores half of all light stuns.'});
+Object.assign(ST_INFO.ce, {desc:'Cursed technique damage 0.65–1.45×, cooldowns 1.35–0.7×, CE recovery 0.45–1.9×. From 85: a cursed burst flares with every technique.'});
+Object.assign(ST_INFO.iq, {desc:'Reaction time, reading, mistakes and timing of abilities. Below 40: often misses the chance to defend. From 80: reads attacks and blocks or dodges far more.'});
+stLive = function(f){
+  const s = (k) => (f && f[k] != null ? f[k] : (k === 'str' ? f && f.atk : k === 'res' ? f && f.def : null)) ?? 60;
+  const v = {spd:s('spd'), str:s('str'), res:s('res'), ce:s('ce'), iq:s('iq')};
+  return {v, hp:stCurve(v.res, 0.7, 1.45), run:stCurve(v.spd, 0.62, 1.42), getup:stCurve(v.spd, 0.6, 1.7), phys:stCurve(v.str, 0.62, 1.5), magic:stCurve(v.ce, 0.65, 1.45),
+    cd:stCurve(v.ce, 1.35, 0.7), stun:stCurve(v.res, 1.35, 0.6), regen:stCurve(v.ce, 0.45, 1.9), dash:stCurve(v.spd, 0.85, 1.4), kb:stCurve(v.str, 1, 1.6)};
+};
+stApplyLive = function(r, f){
+  const L = stLive(f);
+  r.stat = L.v; r.stL = L;
+  r.maxHp = Math.round(r.maxHp*L.hp); r.hp = r.maxHp; r.speedMul *= L.run;
+  r.stPhys = L.phys; r.stMagic = L.magic; r.stCd = L.cd; r.stStun = L.stun; r.stGetup = L.getup;
+  r.stNoDash = L.v.spd < 40; r.dashSpeed = 11*L.dash; r.stGhost = L.v.spd >= 80; r.stCrush = L.v.str >= 85; r.stIron = L.v.res >= 80; r.stBurst = L.v.ce >= 85;
+  if(r.lm) r.lm = undefined;
+};
+// SPD: kein Dash für zu Langsame, schnellere Dashes für Schnelle
+const _st2Dash = Ragdoll.prototype.dash;
+Ragdoll.prototype.dash = function(){
+  if(this.stNoDash){ if(this === player) bus.emit('log', `${this.name} is too slow to dash`); return; }
+  _st2Dash.call(this);
+  if(this.stL && this.dashT > 0){ this.dashCd /= this.stL.dash; if(this.stGhost) this.stGhostT = 0.45; }
+};
+// Nachbilder: transparente Kopien der Figur, die schnell verblassen
+const ST_GHOST_MAX = 24; let stGhosts = 0, stGhostTotal = 0;
+function stGhost(r, col){
+  if(stGhosts >= ST_GHOST_MAX) return; stGhosts++; stGhostTotal++;
+  const g = new THREE.Group(), mat = new THREE.MeshBasicMaterial({color:col, transparent:true, opacity:0.42, depthWrite:false, blending:THREE.AdditiveBlending});
+  for(const p of r.partList) p.group.traverse(o => { if(!o.isMesh || o.userData.outline || !o.visible) return; const m = new THREE.Mesh(o.geometry, mat); m.matrixAutoUpdate = false; m.matrix.copy(o.matrixWorld); g.add(m); });
+  scene.add(g);
+  const done = () => { scene.remove(g); mat.dispose(); stGhosts--; };
+  if(typeof fxAdd === 'function' && SS.active) fxAdd({dur:0.42, update(dt, t){ mat.opacity = 0.42*(1 - t/0.42); }, dispose:done});
+  else setTimeout(done, 350);
+}
+// STR: Wucht und Brecher (nur physische Treffer)
+const _st2Hit = resolveHit;
+resolveHit = function(att, tgt, def, part, dir){
+  const hp0 = tgt ? tgt.hp : 0, blk = tgt && tgt.blocking;
+  const out = _st2Hit(att, tgt, def, part, dir);
+  try{
+    if(att && att.stL && tgt && def && !stIsMagic(def) && tgt.hp < hp0 && !tgt.ko){
+      const v = att.stat.str;
+      if(v >= 70 && dir && tgt.addVelocity){ const k = (att.stL.kb - 1)*(def.kb || 1)*2.2; tgt.addVelocity({x:(dir.x || 0)*k, y:k*0.25, z:(dir.z || 0)*k}); }
+      if(att.stCrush && (def.dmg || 0) >= 6){ const p = tgt.core.p; shake = Math.max(shake, 0.12); if(typeof spawnShock === 'function') spawnShock(p.x, p.z, 2.2, '#ff7a3a');
+        if(Math.random() < 0.35 && typeof spawnSfx === 'function') spawnSfx(tgt.parts.head.p, 'ドン', 'red');
+        if(blk && Math.random() < 0.5){ tgt.blocking = false; tgt.blockHeld = false; if(tgt.setState) tgt.setState(STATES.HEAVY_STUN, 0.55); if(typeof spawnSfx === 'function') spawnSfx(tgt.parts.head.p, 'BREAK!', 'red'); } }
+    }
+  }catch(e){}
+  return out;
+};
+// RES: Eiserner Körper
+const _st2Set = Ragdoll.prototype.setState;
+Ragdoll.prototype.setState = function(s, dur){
+  if(this.stIron && s === STATES.LIGHT_STUN && !(this.scriptT > 0) && !stCine() && Math.random() < 0.5){
+    if(Math.random() < 0.3 && typeof spawnSfx === 'function') spawnSfx(this.parts.head.p, '鉄', 'ink');
+    return;
+  }
+  return _st2Set.call(this, s, dur);
+};
+// CE: Regeneration und Ausbrüche
+const _st2Cast = Ragdoll.prototype.cast;
+Ragdoll.prototype.cast = function(id){
+  const ok = _st2Cast.call(this, id);
+  if(ok && this.stBurst && !stCine()){ const p = this.core.p; emitParticles(p.x, p.y, p.z, 26, {speed:3.5, up:2.5, color:Math.random() < 0.5 ? '#b04aff' : '#ffffff', size:0.28, life:0.55, gravity:0, drag:2});
+    if(typeof avRing === 'function') avRing(V3(p.x, p.y, p.z), '#b04aff', 2.2, 0.3); }
+  return ok;
+};
+const _st2Phys = physicsStep;
+physicsStep = function(){
+  _st2Phys();
+  if(stCine()) return;
+  for(const r of ragdolls){
+    if(!r.stL || r.ko) continue;
+    // CE-Regeneration relativ zur Basis (≈ 1,8/s bei CE 60)
+    if(r.bal && r.state !== STATES.RAGDOLL){ const base = BAL_GAIN.regen + r.stat.ce*BAL_GAIN.regenCe; r.ce = Math.max(0, Math.min(100, r.ce + base*(r.stL.regen - 1)*DT)); }
+    // Nachbilder: beim Dash immer, bei Spitzentempo in kurzen Schüben (nicht ständig)
+    if(r.stGhost && r.state === STATES.NORMAL){
+      const sp = Math.hypot(r.cvel ? r.cvel.x : 0, r.cvel ? r.cvel.z : 0);
+      if((r.stGhostCd || 0) > 0) r.stGhostCd -= DT;
+      if(!(r.stGhostT > 0) && sp > 5.6 && (r.stGhostCd || 0) <= 0){ r.stGhostT = 0.6; r.stGhostCd = 2.2 + Math.random()*2.5; }
+      if(r.stGhostT > 0){ r.stGhostT -= DT; r.stGhostE = (r.stGhostE || 0) - DT; if(r.stGhostE <= 0 && (sp > 4 || r.dashT > 0)){ r.stGhostE = 0.07; stGhost(r, TEAMS[r.team] ? TEAMS[r.team].accent : '#7fe6ff'); } }
+    }
+  }
+};
+// INT: Abwehr – Kluge lesen mehr, Unbedachte verpassen Chancen
+const _st2React = Mind.prototype.react;
+Mind.prototype.react = function(B, th, ux, uz){
+  const s = this.r && this.r.stat;
+  if(s && s.iq < 40 && Math.random() < (40 - s.iq)/40*0.55 + 0.15) return false;
+  const out = _st2React.call(this, B, th, ux, uz);
+  if(!out && s && s.iq >= 80 && th && th.def && Math.random() < (s.iq - 75)/24*0.6){ B.blockDelay = Math.max(0, (th.remain || 0) - 0.14); B.blockHoldT = B.blockDelay + (th.def.a || 0.2) + 0.3; B.setIntent('BLOCK'); B.state = 'DEFEND'; return true; }
+  return out;
+};
+const _st2LP = learnProfile;
+learnProfile = function(r){
+  const P = _st2LP(r), s = r.stat; if(!s) return P; const q = (s.iq - 60)/40;   // zusätzlich zur bisherigen Spreizung
+  P.reactMs *= Math.max(0.55, 1 - q*0.3); P.misexec *= Math.max(0.3, 1 - q*0.5); P.timingJitter *= Math.max(0.4, 1 - q*0.4); P.lr *= Math.max(0.5, 1 + q*0.4);
+  return P;
+};
+// Eigenschaften in Kämpferansicht und Creator sichtbar machen
+const _st2Kd = kdOpen;
+kdOpen = function(id, cmpId){
+  _st2Kd(id, cmpId);
+  const p = SS.st && SS.st.players[id], h = document.querySelector('#kd-modal .kd-mh'); if(!p || !h) return;
+  const T = stTraits(p); if(!T.length) return;
+  const el = document.createElement('div'); el.className = 'st-traits'; el.innerHTML = T.map(x => `<span class="kd-tag" style="background:${ST_INFO[x.k].col};color:#fff">${ST_INFO[x.k].short} · ${ssEsc(x.t)}</span>`).join(' '); h.after(el);
+};
+const _st2Sum = ccSummary;
+ccSummary = function(){ const h = _st2Sum(), d = CC.d, T = d ? stTraits(d) : [];
+  return h + (T.length ? `<div class="st-traits">${T.map(x => `<span class="kd-tag" style="background:${ST_INFO[x.k].col};color:#fff">${ST_INFO[x.k].short} · ${kdEsc(x.t)}</span>`).join(' ')}</div>` : ''); };
+(() => { const c = document.createElement('style'); c.textContent = '.st-traits{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0}.st-traits .kd-tag{font-size:10px;padding:2px 6px}'; document.head.appendChild(c); })();
+try{ Object.assign(window.__arena, {stLive:(f) => stLive(f), stCurve, stTraits, stGhost, stGhostCount:() => stGhostTotal}); }catch(e){}
+
 requestAnimationFrame(frame);
 } // startGame
 </script>
