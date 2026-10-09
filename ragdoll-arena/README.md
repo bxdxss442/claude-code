@@ -47,3 +47,27 @@ Turniers, über „Neue Saison“ lassen sich die Figuren ebenfalls importieren.
 3. **Stat web** on the big screens: radar chart, OVR, rarity, and the rank for each stat.
 4. **Meditation:** Four soul flames appear as silhouettes. One after another they crack open in rarity colors (Common, Rare, Epic, Legendary, Mythic), each with the move name, element, requirement and an explanation. The ultimate comes last.
 5. **Finale** in the hall.
+
+## Stats with real weight (v61)
+
+| Stat | Curve (20 → 60 → 99) | Traits |
+|---|---|---|
+| SPD | run speed 0.62 → 1.0 → 1.42×, faster dash | below 40: cannot dash · from 80: afterimages at top speed |
+| STR | physical damage 0.62 → 1.5× | from 70: extra knockback · from 85: crushing blows (shockwave, guard break) |
+| RES | health 0.7 → 1.45×, stuns 1.35 → 0.6× | below 40: stays down longer · from 80: Iron Body ignores half of all light stuns |
+| CE | technique damage 0.65 → 1.45×, cooldowns 1.35 → 0.7×, CE recovery 0.45 → 1.9× | from 85: cursed burst on every technique |
+| INT | reaction, reading, mistakes, timing | below 40: misses chances to defend · from 80: reads attacks |
+
+Traits are shown in the fighter view and in the creator.
+
+## 30 new Jujutsu techniques (v62)
+
+| Stat | Techniques |
+|---|---|
+| CE | Hollow Purple ★5 · Absolute: Ultra Cannon · Wing King · Convergence: Piercing Blood · Auspicious Beasts: Ryu · Disaster Flames · Shikigami Sharks · Sticky Bombs |
+| STR | Mahoraga: Sword of Extermination ★5 · Rika: Crushing Grip · Blazing Courage · Rough Energy Barrage · Blood Meteorite |
+| SPD | Rika Katana: Draw Cut · Nue · Nyoi Staff: Static Thrust · Tiger Funeral · Manji Kick |
+| RES | Insect Armor · Root Prison · Auspicious Beasts: Reiki · Hollow Wicker Basket · Body Repel |
+| INT | Domain Amplification · Cursed Corpse Brawlers · Cursed Word: Blast Away! · Space Manipulation: Ui Ui · Heart Catch · Auspicious Beasts: Kaichi · Cursed Word: Run! |
+
+Each technique has its own models and VFX, its own sound layers and its own mechanic (binding, teleporting, stealing CE, reflecting, sealing, delayed bombs, summons and so on). Each also has two upgrade levels, stars and a stat requirement, an element for Chemical Reactions, and an AI rating. Cost and cooldown come from the star balancing. Running tournaments pass every new technique to two suitable fighters.

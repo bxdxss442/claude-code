@@ -22526,7 +22526,7 @@ resolveHit = function(att, tgt, def, part, dir){
   try{
     if(att && att.stL && tgt && def && !stIsMagic(def) && tgt.hp < hp0 && !tgt.ko){
       const v = att.stat.str;
-      if(v >= 70 && dir && tgt.addVelocity){ const k = (att.stL.kb - 1)*(def.kb || 1)*2.2; tgt.addVelocity({x:(dir.x || 0)*k, y:k*0.25, z:(dir.z || 0)*k}); }
+      if(v >= 70 && dir && tgt.addVelocity){ const k = (att.stL.kb - 1)*Math.min(6, def.kb || 1)*0.6; tgt.addVelocity({x:(dir.x || 0)*k, y:k*0.2, z:(dir.z || 0)*k}); }   // höchstens ~2 m/s extra
       if(att.stCrush && (def.dmg || 0) >= 6){ const p = tgt.core.p; shake = Math.max(shake, 0.12); if(typeof spawnShock === 'function') spawnShock(p.x, p.z, 2.2, '#ff7a3a');
         if(Math.random() < 0.35 && typeof spawnSfx === 'function') spawnSfx(tgt.parts.head.p, 'ドン', 'red');
         if(blk && Math.random() < 0.5){ tgt.blocking = false; tgt.blockHeld = false; if(tgt.setState) tgt.setState(STATES.HEAVY_STUN, 0.55); if(typeof spawnSfx === 'function') spawnSfx(tgt.parts.head.p, 'BREAK!', 'red'); } }
@@ -22596,6 +22596,460 @@ ccSummary = function(){ const h = _st2Sum(), d = CC.d, T = d ? stTraits(d) : [];
   return h + (T.length ? `<div class="st-traits">${T.map(x => `<span class="kd-tag" style="background:${ST_INFO[x.k].col};color:#fff">${ST_INFO[x.k].short} · ${kdEsc(x.t)}</span>`).join(' ')}</div>` : ''); };
 (() => { const c = document.createElement('style'); c.textContent = '.st-traits{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0}.st-traits .kd-tag{font-size:10px;padding:2px 6px}'; document.head.appendChild(c); })();
 try{ Object.assign(window.__arena, {stLive:(f) => stLive(f), stCurve, stTraits, stGhost, stGhostCount:() => stGhostTotal}); }catch(e){}
+
+
+
+/* ============================ chars/ 30 neue Jujutsu-Techniken (v62) ============================ */
+// Jede Technik hat eigene Modelle/VFX, eigene Sounds (MAV), eigene Mechanik, zwei Upgrade-Stufen, Sterne/Anforderung (ST_MOVES),
+// Element (Chemical Reactions), KI-Bewertung und läuft über das Balancing nach Sternen (Kosten/Abklingzeit je Stufe).
+const JJ_LIST = [];
+function jj(id, label, def, ai, u2, u3){ jx(id, label, Object.assign({cat:'Jujutsu'}, def), ai, u2, u3); JX_LIST.pop(); JJ_LIST.push(id); }
+const jjHit = (id, o) => jxSub(id, Object.assign({root:id.replace(/_h\d?$|_hit$|_[a-z]+hit$/, '')}, o));
+const JJV = (x, y, z) => new THREE.Vector3(x, y, z);
+// Wegwerf-Materialien/Geometrien werden beim Entfernen freigegeben (geteilte bleiben)
+const jjGlow = (c, o = 0.9) => { const m = glowMat(c, o); m.userData.jj = 1; return m; };
+const jjBasic = (c, o = 1) => { const m = new THREE.MeshBasicMaterial({color:c, transparent:o < 1, opacity:o, depthWrite:o >= 1}); m.userData.jj = 1; return m; };
+const jjGeo = (g) => { g.userData.jj = 1; return g; };
+const jjMesh = (geo, mat, sx = 1, sy = 1, sz = 1) => { const m = new THREE.Mesh(geo, mat); m.scale.set(sx, sy, sz); return m; };
+const jjToon = (geo, c, sx, sy, sz) => { const m = new THREE.Mesh(geo, toon(c)); m.scale.set(sx, sy, sz); return withOutline(m, 1.07); };
+class JjProp{
+  constructor(g, life, anim, pos){ this.g = g; this.life = life; this.anim = anim; this.t = 0; if(pos) g.position.copy(pos); scene.add(g); }
+  update(dt){ this.t += dt; return this.t < this.life; }
+  render(){ if(this.anim) this.anim(this, this.g, Math.min(1, this.t/this.life)); }
+  dispose(){ scene.remove(this.g); this.g.traverse(o => { if(o.geometry && o.geometry.userData.jj) o.geometry.dispose(); if(o.material && o.material.userData && o.material.userData.jj) o.material.dispose(); }); }
+}
+const jjProp = (g, life, anim, pos) => addEntity(new JjProp(g, life, anim, pos));
+// Leuchtender Strahl von a nach b, der verblasst
+function jjBeam(a, b, color, w, life, core = '#ffffff'){
+  const len = Math.max(0.1, a.distanceTo(b)), g = new THREE.Group();
+  const o = jjMesh(jjGeo(new THREE.CylinderGeometry(w, w, len, 14, 1, true)), jjGlow(color, 0.8)), c = jjMesh(jjGeo(new THREE.CylinderGeometry(w*0.38, w*0.38, len, 10, 1, true)), jjGlow(core, 0.95));
+  g.add(o, c); g.position.copy(a).add(b).multiplyScalar(0.5); g.quaternion.setFromUnitVectors(JJV(0, 1, 0), b.clone().sub(a).normalize());
+  return jjProp(g, life, (P, gg, k) => { o.material.opacity = 0.8*(1 - k); c.material.opacity = 0.95*(1 - k); const s = 1 + k*0.8; gg.scale.set(s, 1, s); });
+}
+// Kegel aus Flammen/Wind (Form, flackernd)
+function jjCone(r, f, R, color, life){
+  const g = new THREE.Group(), m = jjMesh(jjGeo(new THREE.ConeGeometry(R*0.45, R, 18, 1, true)), jjGlow(color, 0.5)); m.rotation.x = -Math.PI/2; m.position.z = R/2; g.add(m);
+  const p = r.core.p; g.position.set(p.x + f.x*0.6, p.y + 0.2, p.z + f.z*0.6); g.rotation.y = Math.atan2(f.x, f.z);
+  return jjProp(g, life, (P, gg, k) => { m.material.opacity = 0.5*(1 - k)*(0.75 + Math.random()*0.25); gg.scale.set(0.6 + k*0.6, 0.6 + k*0.6, 0.7 + k*0.4); });
+}
+const jjFace = (r, T) => { if(T) r.yaw = Math.atan2(T.core.p.x - r.core.p.x, T.core.p.z - r.core.p.z); };
+const jjInArena = (x, z) => { if(MAP.id === 'bluelock' && typeof SSF !== 'undefined') return [Math.max(-SSF.X + 1.5, Math.min(SSF.X - 1.5, x)), Math.max(-SSF.Z + 1.5, Math.min(SSF.Z - 1.5, z))]; return [x, z]; };
+
+/* ---------- 1. Hohles Lila (Gojo) ---------- */
+jjHit('jj_purple_hit', {label:'Hollow Purple', dmg:34, stun:'ragdoll', kb:13, up:0.4, aoe:true, ignoreAura:true, guardBreak:true, guardDmg:100, hitstop:0.08, shake:0.5, root:'jj_purple'});
+function jjPurpleMesh(R){ const g = new THREE.Group(); g.add(jjMesh(jjGeo(new THREE.SphereGeometry(R, 28, 18)), jjGlow('#8a2bff', 0.55)), jjMesh(jjGeo(new THREE.SphereGeometry(R*0.62, 22, 14)), jjGlow('#e6c8ff', 0.85)), jjMesh(jjGeo(new THREE.SphereGeometry(R*0.3, 16, 10)), jjBasic('#ffffff')));
+  for(let i = 0; i < 3; i++){ const t = jjMesh(jjGeo(new THREE.TorusGeometry(R*(1.15 + i*0.18), 0.04, 6, 40)), jjGlow(i % 2 ? '#ff3b6a' : '#3fa8ff', 0.8)); t.rotation.set(Math.random()*3, Math.random()*3, 0); t.userData.spin = 2 + i; g.add(t); } return g; }
+jj('jj_purple', 'Hollow Purple', {pose:'castBoth', side:'B', cd:14, w:0.85, cat:'Limitless',
+  onStart(r){ spawnSfx(r.parts.head.p, '虚式「茈」', 'ink'); const f = facingVec(r), p = r.core.p, s = JJV(-f.z, 0, f.x);
+    for(const [col, sd] of [['#ff3b4f', 1], ['#3fa8ff', -1]]){ const o = jjMesh(jjGeo(new THREE.SphereGeometry(0.28, 16, 10)), jjGlow(col, 0.95));
+      jjProp(o, 0.85, (P, g, k) => { const q = r.core.p, e = k*k; g.position.set(q.x + s.x*sd*1.3*(1 - e) + f.x*0.6, q.y + 0.5, q.z + s.z*sd*1.3*(1 - e) + f.z*0.6); g.scale.setScalar(1 + Math.sin(k*30)*0.15 + k); }); }
+    for(let i = 0; i < 4; i++) after(i*0.18, () => alive(r) && spawnLightning(r.parts.torso.p, 3, i % 2 ? '#ff3b4f' : '#3fa8ff', 0.8)); },
+  onActive(r){ const L = jxL(r, 'jj_purple'), T = nxTarget(r, 30), f = nxDir(r, T), R = L >= 2 ? 2.0 : 1.5, p = r.core.p, y = p.y + 0.4;
+    shake = Math.max(shake, 0.35); if(typeof speedLines === 'function') speedLines(1.2, 0.6, '#d9b8ff'); impactFrame();
+    addEntity(new KxRunner(r, JJV(p.x + f.x*1.2, y, p.z + f.z*1.2), {dir:f, speed:15, range:28, life:2.2, ghost:true, pierce:true, r:R + 0.4, hy:R + 1.5,
+      build:() => jjPurpleMesh(R),
+      onHit(e, U){ kxDmgAs(ATTACKS.jj_purple_hit, L >= 3 ? 46 : 34, () => resolveHit(r, e, ATTACKS.jj_purple_hit, e.parts.torso, U.dir.clone())); spawnSfx(e.parts.head.p, '茈', 'ink'); },
+      tick(U, dt){ U.pos.y = y; breakEnvAround(U.pos.x, U.pos.z, R*0.9, 12, y); if(Math.random() < 0.9) emitParticles(U.pos.x, U.pos.y, U.pos.z, 3, {speed:2, color:Math.random() < 0.5 ? '#b04aff' : '#ffffff', size:0.35, life:0.5, gravity:0, drag:2});
+        if(L >= 3 && Math.random() < 0.15) spawnCrater(U.pos.x, U.pos.z, R*0.7); },
+      anim(U, g){ g.children.forEach(c => { if(c.userData.spin){ c.rotation.x += 0.05*c.userData.spin; c.rotation.y += 0.03*c.userData.spin; } }); },
+      onEnd(U){ spawnShock(U.pos.x, U.pos.z, R*3, '#b04aff'); emitParticles(U.pos.x, U.pos.y, U.pos.z, 60, {speed:6, color:'#d9b8ff', size:0.4, life:0.6, gravity:0, drag:2}); }})); }},
+  (c) => c.d > 3 && c.d < 26 ? (c.mid >= 2 ? 1.7 : 1.35) : 0.1, ['Wider Erasure', 'The sphere grows from 1.5 m to 2 m radius'], ['Maximum Output', '46 instead of 34 damage, leaves craters along its path']);
+
+/* ---------- 2. Nue (Megumi) ---------- */
+jjHit('jj_nue_hit', {label:'Nue', dmg:13, stun:'heavy', stunT:0.9, kb:3, up:0.2, cat:'Shikigami', shake:0.2, root:'jj_nue'});
+jjHit('jj_nue_zap', {label:'Nue Discharge', dmg:6, stun:'heavy', stunT:0.6, kb:1, aoe:true, cat:'Shikigami', root:'jj_nue'});
+function jjBird(){ const g = new THREE.Group(); g.add(jjToon(GEO.ball, '#16141c', 0.32, 0.3, 0.55)); const m = jjToon(GEO.ball, '#f2efe6', 0.22, 0.2, 0.18); m.position.set(0, 0.08, 0.42); g.add(m);
+  for(const s of [-1, 1]){ const w = jjToon(GEO.box, '#1d1b26', 1.3, 0.05, 0.45); w.position.set(s*0.75, 0.05, -0.05); w.userData.wing = s; g.add(w); }
+  const t = jjToon(GEO.cone, '#16141c', 0.22, 0.6, 0.12); t.rotation.x = Math.PI/2; t.position.z = -0.55; g.add(t); return g; }
+jj('jj_nue', 'Nue', {pose:'castBoth', cd:9, w:0.3, cat:'Shikigami', onStart(r){ spawnSfx(r.parts.head.p, '鵺', 'ink'); },
+  onActive(r){ const L = jxL(r, 'jj_nue'), T = nxTarget(r, 22); if(!T) return; const p = r.core.p, done = new Set();
+    const fire = (tgt, from, again) => addEntity(new JxBolt(r, from, JJV(tgt.core.p.x - from.x, tgt.core.p.y - from.y, tgt.core.p.z - from.z), {speed:15, homing:tgt, turn:5, life:2.2, r:0.9, def:ATTACKS.jj_nue_hit, face:true, trail:'#bfe9ff',
+      mesh(){ return jjBird(); },
+      onHit(e){ done.add(e); spawnLightning(e.parts.torso.p, 8, '#bfe9ff', 1.3, 0.05, 0.25); blastAt(r, e.core.p.x, e.core.p.y, e.core.p.z, L >= 2 ? 3.2 : 2.2, ATTACKS.jj_nue_zap, {breakEnv:false}); spawnSfx(e.parts.head.p, 'バチッ', 'gold');
+        if(again){ const n = enemiesOf(r).filter(o => !done.has(o) && hdist(o.core.p, e.core.p) < 12)[0]; if(n) after(0.25, () => alive(n) && fire(n, e.parts.torso.p.clone().add(JJV(0, 2, 0)), false)); } }}));
+    fire(T, JJV(p.x, p.y + 3.2, p.z), L >= 3); }},
+  AI.mid, ['Charged Wings', 'The discharge reaches 3.2 m instead of 2.2 m'], ['Second Dive', 'Nue dives at a second enemy afterwards']);
+
+/* ---------- 3. Tigerbestattung (Megumi) ---------- */
+jjHit('jj_tiger_hit', {label:'Tiger Funeral', dmg:14, stun:'heavy', stunT:0.8, kb:5, up:0.25, aoe:true, cat:'Shikigami', shake:0.25, root:'jj_tiger'});
+function jjTiger(){ const g = new THREE.Group(); const b = jjToon(GEO.ball, '#e8b04a', 0.55, 0.42, 0.95); b.position.y = 0.6; g.add(b); const h = jjToon(GEO.ball, '#e8b04a', 0.36, 0.34, 0.36); h.position.set(0, 0.95, 0.85); g.add(h);
+  for(let i = 0; i < 4; i++){ const s = jjToon(GEO.box, '#141218', 0.07, 0.3, 0.06); s.position.set(-0.3 + i*0.2, 0.75, 0.2); g.add(s); }
+  for(const s of [-1, 1]){ const e = jjMesh(GEO.ball, jjBasic('#ff3b3b'), 0.06, 0.06, 0.06); e.position.set(s*0.14, 1.02, 1.17); g.add(e); } return g; }
+jj('jj_tiger', 'Tiger Funeral', {pose:'castBoth', cd:9, w:0.25, cat:'Shikigami', onStart(r){ spawnSfx(r.parts.head.p, '虎葬', 'ink'); },
+  onActive(r){ const L = jxL(r, 'jj_tiger'), T = nxTarget(r, 16); if(!T) return; const pounce = (tgt, delay) => { const x = tgt.core.p.x, z = tgt.core.p.z, y = jxGroundY(tgt);
+      const sh = jjMesh(jjGeo(new THREE.CircleGeometry(1.6, 32)), jjBasic('#05040a', 0.85)); sh.rotation.x = -Math.PI/2; jjProp(sh, delay + 0.9, (P, g, k) => { g.scale.setScalar(Math.min(1, P.t*4)); g.material.opacity = 0.85*(1 - Math.max(0, (P.t - delay - 0.4)/0.5)); }, JJV(x, y + 0.03, z));
+      const tg = jjTiger(); jjProp(tg, 0.8, (P, g, k) => { const t = P.t - delay; g.visible = t > 0; if(t <= 0) return; const kk = Math.min(1, t/0.35); g.position.set(x - 1.2 + kk*1.2, y - 1.4 + Math.sin(kk*Math.PI)*2.6 + kk*1.4 - (t > 0.35 ? (t - 0.35)*4 : 0), z); g.rotation.y = Math.PI/2; }, JJV(x, y - 2, z));
+      after(delay + 0.3, () => { blastAt(r, x, y + 0.9, z, 1.8, ATTACKS.jj_tiger_hit); spawnCuts(JJV(x, y + 1.1, z), 3, '#ffd28a', 1.4); spawnShock(x, z, 2, '#e8b04a'); ssS('roar', {gain:0.5});
+        if(L >= 2) for(const e of enemiesOf(r)) if(hdist(e.core.p, JJV(x, 0, z)) < 2) addEntity(new KxDot(r, e, 3, 4, '#ff2a4a', '裂'));
+        if(L >= 3 && delay < 0.6){ const n = enemiesOf(r).find(o => o !== tgt && hdist(o.core.p, tgt.core.p) < 10); if(n) pounce(n, 0.5); } }); };
+    pounce(T, 0.45); }},
+  AI.mid, ['Rending Claws', 'The claws leave bleeding wounds'], ['Second Leap', 'The tiger pounces on a second enemy']);
+
+/* ---------- 4. Mahoraga (Megumi) ---------- */
+jjHit('jj_maho_hit', {label:'Sword of Extermination', dmg:30, stun:'ragdoll', kb:10, up:0.35, aoe:true, guardBreak:true, guardDmg:100, hitstop:0.08, shake:0.55, cat:'Shikigami', root:'jj_mahoraga',
+  preHit(att, tgt, mod){ if(kxStrip(tgt)){ mod.dmg *= 1.4; spawnSfx(tgt.parts.head.p, '退魔', 'gold'); } }});
+function jjMahoraga(){ const g = new THREE.Group(), W = '#ece8dc';
+  const body = jjToon(GEO.box, W, 1.1, 1.6, 0.7); body.position.y = 2.6; g.add(body); const hips = jjToon(GEO.box, W, 0.9, 0.5, 0.6); hips.position.y = 1.6; g.add(hips);
+  for(const s of [-1, 1]){ const l = jjToon(GEO.box, W, 0.36, 1.4, 0.4); l.position.set(s*0.3, 0.7, 0); g.add(l); }
+  const head = jjToon(GEO.ball, W, 0.42, 0.5, 0.42); head.position.y = 3.75; g.add(head);
+  for(const s of [-1, 1]){ const w = jjToon(GEO.box, '#bfb8a8', 0.12, 0.5, 0.12); w.position.set(s*0.22, 3.9, 0.25); w.rotation.z = s*0.5; g.add(w); }
+  const arm = new THREE.Group(); arm.position.set(0.75, 3.2, 0); const ua = jjToon(GEO.box, W, 0.3, 1.2, 0.3); ua.position.y = -0.6; arm.add(ua);
+  const blade = jjMesh(GEO.box, jjGlow('#fff2c4', 0.95), 0.18, 2.6, 0.06); blade.position.y = -2.4; arm.add(blade); g.add(arm); g.userData.arm = arm;
+  const wheel = new THREE.Group(); wheel.position.y = 4.6; const ring = jjToon(jjGeo(new THREE.TorusGeometry(0.75, 0.07, 6, 28)), '#d9c89a', 1, 1, 1); wheel.add(ring);
+  for(let i = 0; i < 8; i++){ const s = jjToon(GEO.box, '#d9c89a', 0.06, 1.5, 0.06); s.rotation.z = i*Math.PI/8; wheel.add(s); } wheel.rotation.x = Math.PI/2; g.add(wheel); g.userData.wheel = wheel;
+  return g; }
+jj('jj_mahoraga', 'Mahoraga: Sword of Extermination', {pose:'castBoth', side:'B', cd:16, w:0.6, cat:'Shikigami', onStart(r){ spawnSfx(r.parts.head.p, '八握剣異戒神将魔虚羅', 'ink'); ssS('gong', {gain:0.6}); },
+  onActive(r){ const L = jxL(r, 'jj_mahoraga'), T = nxTarget(r, 14), f = nxDir(r, T), p = r.core.p, y = jxGroundY(r), base = JJV(p.x - f.x*1.6, y, p.z - f.z*1.6), len = 9, w = 2.4;
+    const M = jjMahoraga(); M.rotation.y = Math.atan2(f.x, f.z);
+    jjProp(M, 2.0, (P, g) => { const t = P.t; g.position.set(base.x, y + Math.min(0, (t - 0.3)*6) , base.z); g.userData.wheel.rotation.z += t > 0.4 && t < 0.7 ? 0.25 : 0.01;
+      const arm = g.userData.arm; arm.rotation.x = t < 0.55 ? -2.6*Math.min(1, t/0.4) : -2.6 + Math.min(1, (t - 0.55)/0.12)*3.6; if(t > 1.6) g.scale.setScalar(Math.max(0.01, 1 - (t - 1.6)/0.4)); }, JJV(base.x, y - 2, base.z));
+    after(0.45, () => { ssS('klack', {gain:0.8}); spawnSfx(JJV(base.x, y + 5, base.z), 'ガコン', 'gold'); });
+    tele({x:p.x, z:p.z, y, line:{fx:f.x, fz:f.z, len, w}, delay:0.62, color:'#fff2c4', onFire(){
+      for(const e of lineHits(r, p, f, len, w/2, ATTACKS.jj_maho_hit)) resolveHit(r, e, ATTACKS.jj_maho_hit, e.parts.torso, f.clone());
+      for(let s = 1; s < len; s += 1.5) spawnCrater(p.x + f.x*s, p.z + f.z*s, 0.9); breakEnvLine(p.x, p.z, f.x, f.z, len, w/2, 1); shake = Math.max(shake, 0.6); impactFrame();
+      emitParticles(p.x + f.x*len*0.6, y + 0.5, p.z + f.z*len*0.6, 70, {speed:7, up:4, color:Math.random() < 0.5 ? '#fff2c4' : '#c9b9a0', size:0.4, life:0.8, gravity:-6});
+      if(L >= 2) r.addBuff('jjadapt', 6);
+      if(L >= 3) after(0.35, () => { if(!alive(r)) return; const g2 = jxRot(f, 0.5); for(const e of lineHits(r, p, g2, len*0.8, w/2, ATTACKS.jj_maho_hit)) kxDmgAs(ATTACKS.jj_maho_hit, 16, () => resolveHit(r, e, ATTACKS.jj_maho_hit, e.parts.torso, g2.clone())); spawnShock(p.x + g2.x*4, p.z + g2.z*4, 3, '#fff2c4'); }); }}); }},
+  (c) => c.d < 8 ? (c.near >= 2 || c.tStun ? 1.6 : 1.2) : 0.1, ['Adaptation', 'After the strike you take 30 % less damage for 6 s'], ['Second Swing', 'A second sweep follows']);
+
+/* ---------- 5. Fluchwort: Flieg weg! (Inumaki) ---------- */
+jjHit('jj_blast_hit', {label:'Blast Away!', dmg:10, stun:'ragdoll', kb:15, up:0.45, aoe:true, cat:'Cursed Speech', shake:0.3, root:'jj_blastaway'});
+jj('jj_blastaway', 'Cursed Word: Blast Away!', {pose:'cast', cd:10, w:0.25, cat:'Cursed Speech', onStart(r){ spawnSfx(r.parts.head.p, '吹っ飛べ', 'ink'); },
+  onActive(r){ const L = jxL(r, 'jj_blastaway'), T = nxTarget(r, 10), f = nxDir(r, T), R = 7.5, dot = L >= 2 ? 0.25 : 0.55; jjFace(r, T);
+    for(let i = 0; i < 4; i++) after(i*0.07, () => { const p = r.core.p; avRing(JJV(p.x + f.x*(1.2 + i*1.6), p.y + 0.5, p.z + f.z*(1.2 + i*1.6)), '#e8e2d4', 1.6 + i*0.9, 0.3); });
+    jjCone(r, f, R, '#e8e2d4', 0.35); shake = Math.max(shake, 0.25);
+    jxCone(r, f, R, dot, ATTACKS.jj_blast_hit, (e) => { if(L >= 3) e.buffs.confused = Math.max(e.buffs.confused || 0, 1.5); });
+    if(L < 3){ r.hp = Math.max(1, r.hp - 3); spawnSfx(r.parts.head.p, 'ゴホッ', 'red'); } }},
+  (c) => c.d < 6.5 ? (c.near >= 2 ? 1.5 : 1.15) : 0, ['Wide Command', 'The blast covers a much wider cone'], ['Throat Medicine', 'No more self-damage, and the enemies are dazed']);
+
+/* ---------- 6. Absolut: Ultra-Kanone (Mechamaru) ---------- */
+jjHit('jj_cannon_hit', {label:'Ultra Cannon', dmg:26, stun:'heavy', stunT:1.0, kb:7, up:0.2, aoe:true, guardBreak:true, guardDmg:80, cat:'Puppet', hitstop:0.06, shake:0.4, root:'jj_ultracannon'});
+jj('jj_ultracannon', 'Absolute: Ultra Cannon', {pose:'castBoth', side:'B', cd:12, w:0.75, cat:'Puppet',
+  onStart(r){ spawnSfx(r.parts.head.p, '究極メカ丸', 'gold'); const o = jjMesh(jjGeo(new THREE.SphereGeometry(0.2, 14, 10)), jjGlow('#fff2a8', 0.95));
+    jjProp(o, 0.75, (P, g, k) => { const h = jxHand(r), f = facingVec(r); g.position.set(h.x + f.x*0.5, h.y, h.z + f.z*0.5); g.scale.setScalar(0.6 + k*2.4 + Math.sin(k*40)*0.2); if(Math.random() < 0.6) emitParticles(g.position.x + (Math.random() - 0.5)*2, g.position.y + (Math.random() - 0.5)*2, g.position.z + (Math.random() - 0.5)*2, 1, {speed:0.1, color:'#fff2a8', size:0.15, life:0.25, gravity:0, dir:JJV(0, 0, 0)}); }); },
+  onActive(r){ const L = jxL(r, 'jj_ultracannon'), T = nxTarget(r, 24), f = nxDir(r, T), o = jxHand(r), len = rayLen(o, f, 20, o.y), w = L >= 2 ? 1.5 : 1.0; jjFace(r, T);
+    const end = o.clone().addScaledVector(f, len); jjBeam(o, end, '#ffd23f', w*0.55, 0.55, '#fffbe8'); spawnShock(end.x, end.z, 3, '#ffd23f'); shake = Math.max(shake, 0.4); impactFrame();
+    for(const e of lineHits(r, o, f, len, w*0.6, ATTACKS.jj_cannon_hit)) kxDmgAs(ATTACKS.jj_cannon_hit, L >= 3 ? 34 : 26, () => resolveHit(r, e, ATTACKS.jj_cannon_hit, e.parts.torso, f.clone()));
+    breakEnvLine(o.x, o.z, f.x, f.z, len, w*0.6, o.y); r.addVelocity({x:-f.x*3, y:0, z:-f.z*3}); }},
+  AI.long, ['Wide Barrel', 'Beam width 1.5 m instead of 1 m'], ['Overcharge', '34 instead of 26 damage']);
+
+/* ---------- 7. Wurzelkerker (Hanami) ---------- */
+jjHit('jj_root_hit', {label:'Root Prison', dmg:9, stun:'none', kb:0, cat:'Plants', root:'jj_rootprison'});
+jj('jj_rootprison', 'Root Prison', {pose:'smash', cd:11, w:0.3, cat:'Plants', onStart(r){ spawnSfx(r.parts.head.p, '樹根', 'mint'); },
+  onActive(r){ const L = jxL(r, 'jj_rootprison'), T = nxTarget(r, 16); if(!T) return; const x = T.core.p.x, z = T.core.p.z, y = jxGroundY(T), bind = L >= 2 ? 2.4 : 1.6;
+    tele({x, z, y, R:1.8, delay:0.5, color:'#5dff9b', onFire(o){ const g = new THREE.Group();
+      for(let i = 0; i < 9; i++){ const a = i/9*6.28, rr = 0.5 + Math.random()*0.6, s = jjToon(GEO.cone, i % 2 ? '#5a3a22' : '#3f6a2a', 0.18, 2.2 + Math.random(), 0.18); s.position.set(Math.cos(a)*rr, 0, Math.sin(a)*rr); s.rotation.set(Math.sin(a)*0.5, 0, -Math.cos(a)*0.5); g.add(s); }
+      jjProp(g, bind + 0.6, (P, gg, k) => { const t = P.t, up = Math.min(1, t/0.15), dn = t > bind ? 1 - (t - bind)/0.6 : 1; gg.scale.set(1, Math.max(0.01, up*dn), 1); }, JJV(o.x, y, o.z));
+      emitParticles(o.x, y + 0.3, o.z, 40, {speed:4, up:3, color:'#6a4a2a', size:0.35, life:0.6, gravity:-8}); ssS('wood', {gain:0.8});
+      for(const e of enemiesOf(r)) if(hdist(e.core.p, JJV(o.x, 0, o.z)) < o.R + 0.4 && hittable(e, ATTACKS.jj_root_hit)){ resolveHit(r, e, ATTACKS.jj_root_hit, e.parts.torso, JJV(0, 1, 0)); nxFreeze(e, bind); spawnSfx(e.parts.head.p, '縛', 'mint');
+        if(L >= 3){ r.hp = Math.min(r.maxHp, r.hp + 10); spawnSfx(r.parts.head.p, '+10', 'mint'); } } }}); }},
+  (c) => c.d > 2 && c.d < 15 ? (c.tStun ? 0.6 : 1.2) : 0, ['Thick Roots', 'Binds for 2.4 s instead of 1.6 s'], ['Draining Roots', 'You heal 10 HP per bound enemy']);
+
+/* ---------- 8. Katastrophenflammen (Jogo) ---------- */
+jjHit('jj_flame_hit', {label:'Disaster Flames', dmg:2.6, stun:'light', stunT:0.2, kb:0.6, aoe:true, cat:'Fire', guardDmg:10, root:'jj_disaster'});
+jj('jj_disaster', 'Disaster Flames', {pose:'cast', cd:8, w:0.2, cat:'Fire', onStart(r){ spawnSfx(r.parts.head.p, '火礫', 'red'); },
+  onActive(r){ const L = jxL(r, 'jj_disaster'), T = nxTarget(r, 9), n = L >= 2 ? 9 : 6; jjFace(r, T);
+    for(let i = 0; i < n; i++) after(i*0.13, () => { if(!alive(r)) return; const T2 = nxTarget(r, 9); if(T2) jjFace(r, T2); const f = facingVec(r), h = jxHand(r);
+      jjCone(r, f, 6.5, i % 2 ? '#ff7a2a' : '#ffd23f', 0.22);
+      for(let k = 0; k < 10; k++){ const s = Math.random()*6, sp = (Math.random() - 0.5)*s*0.5; emitParticles(h.x + f.x*s - f.z*sp, h.y + (Math.random() - 0.5)*0.6, h.z + f.z*s + f.x*sp, 1, {speed:1.5, up:1.5, color:Math.random() < 0.5 ? '#ff7a2a' : '#ffd23f', size:0.4, life:0.4, gravity:-2}); }
+      jxCone(r, f, 6.5, 0.6, ATTACKS.jj_flame_hit, (e) => { if(L >= 3 && i === 0) addEntity(new KxDot(r, e, 3, 3, '#ff7a2a', '炎')); }); breakEnvAround(h.x + f.x*3, h.z + f.z*3, 1.4, 4, h.y); }); }},
+  (c) => c.d < 6 ? (c.near >= 2 ? 1.4 : 1.1) : 0, ['Longer Blaze', '9 instead of 6 flame bursts'], ['Scorch', 'Burning targets keep taking damage']);
+
+/* ---------- 9. Konvergenz: Durchbohrendes Blut (Choso) ---------- */
+jjHit('jj_pierce_hit', {label:'Piercing Blood', dmg:21, stun:'heavy', stunT:0.55, kb:3, cat:'Blood', ignoreAura:true, hitstop:0.05, shake:0.2, root:'jj_piercing'});
+jj('jj_piercing', 'Convergence: Piercing Blood', {pose:'castBoth', side:'B', cd:9, w:0.5, cat:'Blood',
+  onStart(r){ spawnSfx(r.parts.head.p, '穿血', 'red'); const o = jjMesh(jjGeo(new THREE.SphereGeometry(0.16, 12, 8)), jjGlow('#ff1f3d', 0.95));
+    jjProp(o, 0.5, (P, g, k) => { const h = jxHand(r), f = facingVec(r); g.position.set(h.x + f.x*0.4, h.y, h.z + f.z*0.4); g.scale.setScalar(1.6 - k*1.2); }); },
+  onActive(r){ const L = jxL(r, 'jj_piercing'), T = nxTarget(r, 28), o = jxHand(r), dirs = [nxDir(r, T)]; jjFace(r, T); if(L >= 3) dirs.push(jxRot(dirs[0], 0.18), jxRot(dirs[0], -0.18));
+    for(const f of dirs){ const len = rayLen(o, f, L >= 2 ? 28 : 22, o.y), end = o.clone().addScaledVector(f, len); jjBeam(o, end, '#ff1f3d', 0.12, 0.4, '#ffc8d0');
+      for(const e of lineHits(r, o, f, len, 0.35, ATTACKS.jj_pierce_hit)) kxDmgAs(ATTACKS.jj_pierce_hit, f === dirs[0] ? 21 : 9, () => resolveHit(r, e, ATTACKS.jj_pierce_hit, e.parts.torso, f.clone()));
+      emitParticles(end.x, end.y, end.z, 18, {speed:3, color:'#b3122a', size:0.22, life:0.4, gravity:-6}); breakEnvLine(o.x, o.z, f.x, f.z, len, 0.3, o.y); } }},
+  AI.long, ['Hypervelocity', 'Range 28 m instead of 22 m'], ['Fanned Blood', 'Two extra beams sweep the sides']);
+
+/* ---------- 10. Blutmeteorit (Choso/Kamo) ---------- */
+jjHit('jj_meteor_hit', {label:'Blood Meteorite', dmg:14, stun:'ragdoll', kb:8, up:0.3, cat:'Blood', shake:0.25, guardDmg:45, root:'jj_bloodmeteor'});
+jjHit('jj_meteor_shard', {label:'Blood Shards', dmg:5, stun:'light', stunT:0.3, kb:1.5, aoe:true, cat:'Blood', root:'jj_bloodmeteor'});
+jj('jj_bloodmeteor', 'Blood Meteorite', {pose:'haymaker', cd:7, w:0.3, cat:'Blood', onStart(r){ spawnSfx(r.parts.head.p, '赤血操術', 'red'); },
+  onActive(r){ const L = jxL(r, 'jj_bloodmeteor'), T = nxTarget(r, 20), o = jxHand(r), f = T ? T.parts.torso.p.clone().sub(o).normalize() : facingVec(r); jjFace(r, T);
+    addEntity(new JxBolt(r, o, f, {speed:20, life:1.5, r:0.7, def:ATTACKS.jj_meteor_hit, trail:'#7a0a1a', mesh(){ const m = jjToon(jjGeo(new THREE.DodecahedronGeometry(0.32, 0)), '#6e0b1c', 1, 1, 1); m.userData.spin = 1; return m; }, spin:0.3,
+      onHit(e){ if(L >= 2) e.knockback(f.clone(), 6, 0.3); },
+      onBoom(p){ emitParticles(p.x, p.y, p.z, 30, {speed:4, color:'#b3122a', size:0.25, life:0.5, gravity:-8}); ssS('squelch', {gain:0.6}); if(L >= 3) blastAt(r, p.x, p.y, p.z, 2.2, ATTACKS.jj_meteor_shard, {breakEnv:false}); }})); }},
+  AI.mid, ['Dense Core', 'Sends the target flying much further'], ['Shrapnel', 'Bursts into blood shards on impact']);
+
+/* ---------- 11. Nyoi-Stab: Elektrischer Stoß (Kashimo) ---------- */
+jjHit('jj_nyoi_hit', {label:'Nyoi Staff', melee:true, dmg:12, stun:'heavy', stunT:0.7, kb:4, cat:'Lightning', shake:0.2, guardDmg:40, root:'jj_nyoibo'});
+jjHit('jj_nyoi_bolt', {label:'Static Arc', dmg:6, stun:'heavy', stunT:0.5, kb:1, cat:'Lightning', root:'jj_nyoibo'});
+jj('jj_nyoibo', 'Nyoi Staff: Static Thrust', {pose:'jab', cd:8, w:0.18, cat:'Lightning', onStart(r){ spawnSfx(r.parts.head.p, '如意', 'gold'); },
+  onActive(r){ const L = jxL(r, 'jj_nyoibo'), T = nxTarget(r, 8), f = nxDir(r, T), o = jxHand(r), len = rayLen(o, f, 6.5, o.y); jjFace(r, T);
+    const st = jjToon(GEO.cyl, '#2a3a5a', 0.06, 1, 0.06); const g = new THREE.Group(); st.rotation.x = Math.PI/2; g.add(st); g.rotation.y = Math.atan2(f.x, f.z);
+    jjProp(g, 0.45, (P, gg, k) => { const e = Math.min(1, k*4), l = len*e*(k > 0.6 ? 1 - (k - 0.6)/0.4 : 1); const h = jxHand(r); st.scale.set(0.06, Math.max(0.05, l), 0.06); st.position.z = l/2; gg.position.copy(h); if(Math.random() < 0.5) spawnLightning(h.clone().addScaledVector(f, l), 2, '#bfe9ff', 0.5); });
+    const hits = lineHits(r, o, f, len, 0.45, ATTACKS.jj_nyoi_hit);
+    for(const e of hits){ resolveHit(r, e, ATTACKS.jj_nyoi_hit, e.parts.torso, f.clone()); spawnLightning(e.parts.torso.p, 6, '#bfe9ff', 1, 0.04, 0.2);
+      after(0.05, () => { if(alive(r)) nxChainBolts(r, e, L >= 2 ? 3 : 2, 7, ATTACKS.jj_nyoi_bolt, new Set([e])); }); if(L >= 3) nxFreeze(e, 0.6); } }},
+  AI.melee, ['Wider Arc', 'Lightning jumps to 3 instead of 2 more enemies'], ['Paralysis', 'The thrust paralyzes the target for a moment']);
+
+/* ---------- 12. Insektenpanzer (Yorozu) ---------- */
+jj('jj_insectarmor', 'Insect Armor', {pose:'guard', side:'B', cd:16, w:0.25, cat:'Construction', onActive(r){ const L = jxL(r, 'jj_insectarmor'); r.addBuff('jjinsect', L >= 2 ? 11 : 8); if(L >= 3) r.cs.insectThorns = true;
+    spawnSfx(r.parts.head.p, '昆虫装甲', 'mint'); const t = r.parts.torso.p; emitParticles(t.x, t.y, t.z, 50, {speed:2.5, up:1, color:Math.random() < 0.5 ? '#3a5a2a' : '#9acd32', size:0.3, life:0.6, gravity:0, drag:2}); spawnShock(r.core.p.x, r.core.p.z, 2.4, '#9acd32'); }},
+  AI.buff, ['Thick Chitin', 'Lasts 11 instead of 8 s'], ['Spiked Shell', 'Melee attackers take 30 % of their damage back']);
+
+/* ---------- 13. Rika: Zerquetschender Griff (Yuta) ---------- */
+jjHit('jj_rika_hit', {label:'Rika\'s Grip', dmg:27, stun:'ragdoll', kb:5, up:0.2, guardBreak:true, guardDmg:100, cat:'Curse', hitstop:0.07, shake:0.5, root:'jj_rikaarm'});
+function jjRikaArm(){ const g = new THREE.Group(), C = '#e8dfe8'; const a = jjToon(GEO.cyl, C, 0.45, 3.4, 0.45); a.position.y = 1.7; g.add(a); const h = jjToon(GEO.ball, C, 0.75, 0.55, 0.85); h.position.y = 3.6; g.add(h);
+  for(let i = 0; i < 4; i++){ const fi = jjToon(GEO.cyl, C, 0.13, 0.9, 0.13); fi.position.set(-0.45 + i*0.3, 4.1, 0.45); fi.rotation.x = 0.6; g.add(fi); }
+  const eye = jjMesh(GEO.ball, jjBasic('#0d0b14'), 0.12, 0.12, 0.12); eye.position.set(0.25, 3.7, 0.7); g.add(eye); return g; }
+jj('jj_rikaarm', 'Rika: Crushing Grip', {pose:'castBoth', side:'B', cd:13, w:0.35, cat:'Curse', onStart(r){ spawnSfx(r.parts.head.p, '里香', 'ink'); ssS('shriek', {gain:0.4}); },
+  onActive(r){ const L = jxL(r, 'jj_rikaarm'), T = nxTarget(r, 11); if(!T) return; const f = nxDir(r, T), p = r.core.p, y = jxGroundY(r), base = JJV(p.x - f.x*1.4, y, p.z - f.z*1.4);
+    const A = jjRikaArm(); jjProp(A, 1.3, (P, g) => { const t = P.t, tp = alive(T) ? T.core.p : base; const k = Math.min(1, t/0.4);
+      g.position.set(lerp(base.x, tp.x, k*0.85), y + (t < 0.4 ? -1 + k : 0) - (t > 1.0 ? (t - 1)*6 : 0), lerp(base.z, tp.z, k*0.85)); g.rotation.set(-0.9*k*Math.sin(Math.min(1, t/0.5)*Math.PI*0.5), Math.atan2(f.x, f.z), 0); }, JJV(base.x, y - 2, base.z));
+    after(0.4, () => { if(!alive(T) || !alive(r)) return; if(L >= 2) nxFreeze(T, 0.5); T.addVelocity({x:0, y:5, z:0}); spawnSfx(T.parts.head.p, 'ギュッ', 'ink'); });
+    after(0.85, () => { if(!alive(r)) return; const tp = T.core.p; if(alive(T) && hittable(T, ATTACKS.jj_rika_hit)) resolveHit(r, T, ATTACKS.jj_rika_hit, T.parts.torso, JJV(f.x, -1, f.z).normalize());
+      spawnCrater(tp.x, tp.z, 1.6); spawnShock(tp.x, tp.z, 3, '#e8dfe8'); shake = Math.max(shake, 0.5); ssS('rock', {gain:0.8});
+      if(L >= 3) for(const e of enemiesOf(r)) if(e !== T && hdist(e.core.p, tp) < 2.8 && hittable(e, ATTACKS.jj_rika_hit)) kxDmgAs(ATTACKS.jj_rika_hit, 12, () => resolveHit(r, e, ATTACKS.jj_rika_hit, e.parts.torso, nxDir(r, e))); }); }},
+  AI.mid, ['Iron Grip', 'The target is held in place before the slam'], ['Rika\'s Rage', 'The slam also hits enemies next to the target']);
+
+/* ---------- 14. Manji-Kick (Yuji) ---------- */
+jjHit('jj_manji_hit', {label:'Manji Kick', melee:true, dmg:10, stun:'ragdoll', kb:7, up:0.35, aoe:true, cat:'Martial Arts', shake:0.2, root:'jj_manji'});
+jj('jj_manji', 'Manji Kick', {pose:'spin', cd:6, w:0.12, cat:'Martial Arts', onStart(r){ const f = facingVec(r); r.addVelocity({x:f.x*3, y:3.5, z:f.z*3}); },
+  onActive(r){ const L = jxL(r, 'jj_manji'), R = L >= 2 ? 2.9 : 2.4, kick = () => { const p = r.parts.torso.p; for(const e of enemiesOf(r)) if(hdist(e.core.p, p) < R + 0.3 && Math.abs(e.core.p.y - r.core.p.y) < 2.5 && hittable(e, ATTACKS.jj_manji_hit)) resolveHit(r, e, ATTACKS.jj_manji_hit, e.parts.torso, nxDir(r, e));
+      for(let i = 0; i < 10; i++){ const a = i/10*6.28; emitParticles(p.x + Math.cos(a)*R*0.8, p.y, p.z + Math.sin(a)*R*0.8, 1, {speed:2, color:'#ffffff', size:0.25, life:0.25, gravity:0}); } avRing(p.clone(), '#ffffff', R, 0.25); spawnSfx(r.parts.head.p, '卍', 'ink'); };
+    kick(); if(L >= 3) after(0.3, () => { if(alive(r)){ r.addVelocity({x:0, y:2.5, z:0}); kick(); } }); }},
+  (c) => c.d < 2.4 ? (c.near >= 2 ? 1.4 : 1.1) : 0, ['Wide Spin', 'Radius 2.9 m instead of 2.4 m'], ['Follow-up', 'A second spin kick follows']);
+
+/* ---------- 15. Hohler Weidenkorb ---------- */
+jj('jj_wicker', 'Hollow Wicker Basket', {pose:'guard', side:'B', cd:14, w:0.15, cat:'Barrier', onActive(r){ const L = jxL(r, 'jj_wicker'), dur = L >= 2 ? 6 : 4; r.addBuff('jjwicker', dur); spawnSfx(r.parts.head.p, '彌虚葛籠', 'ink');
+    const g = new THREE.Group(), m = jjMesh(jjGeo(new THREE.CylinderGeometry(1.0, 1.15, 2.0, 18, 6, true)), (() => { const mm = new THREE.MeshBasicMaterial({color:'#c9a46a', wireframe:true, transparent:true, opacity:0.75}); mm.userData.jj = 1; return mm; })());
+    m.position.y = 1.0; g.add(m); const m2 = jjMesh(jjGeo(new THREE.CylinderGeometry(1.05, 1.2, 2.0, 9, 3, true)), (() => { const mm = new THREE.MeshBasicMaterial({color:'#8a6a3a', wireframe:true, transparent:true, opacity:0.6}); mm.userData.jj = 1; return mm; })()); m2.position.y = 1.0; g.add(m2);
+    jjProp(g, dur, (P, gg, k) => { if(!alive(r) || !r.buffs.jjwicker){ gg.visible = false; return; } gg.position.set(r.core.p.x, jxGroundY(r), r.core.p.z); m.rotation.y += 0.02; m2.rotation.y -= 0.03; gg.scale.setScalar(Math.min(1, P.t*5)); });
+    if(L >= 3) after(dur, () => { if(!alive(r)) return; spawnShock(r.core.p.x, r.core.p.z, 3.5, '#c9a46a'); for(const e of enemiesOf(r)) if(hdist(e.core.p, r.core.p) < 3.5) e.knockback(nxDir(r, e), 8, 0.4); }); }},
+  (c) => c.hp < 0.6 && c.d < 7 ? 1.3 : (c.d < 4 && c.near >= 2 ? 1.1 : 0.1), ['Long Weave', 'Lasts 6 instead of 4 s'], ['Unraveling', 'When it ends, enemies nearby are pushed away']);
+
+/* ---------- 16. Gebietsverstärkung ---------- */
+jj('jj_domamp', 'Domain Amplification', {pose:'guard', side:'B', cd:16, w:0.2, cat:'Barrier', onActive(r){ const L = jxL(r, 'jj_domamp'); r.addBuff('jjdomamp', L >= 2 ? 8 : 6); r.cs.domampSeal = L >= 3 ? 5 : 3;
+    spawnSfx(r.parts.head.p, '領域展延', 'ink'); const p = r.core.p; spawnShock(p.x, p.z, 2.2, '#e6f6ff'); emitParticles(p.x, p.y, p.z, 40, {speed:2, up:1.5, color:'#e6f6ff', size:0.25, life:0.6, gravity:0, drag:2}); }},
+  AI.buff, ['Long Amplification', 'Lasts 8 instead of 6 s'], ['Deep Neutralization', 'Hits seal enemy techniques for 5 s instead of 3 s']);
+
+/* ---------- 17. Lodernder Mut (Ogi Zenin) ---------- */
+jjHit('jj_blaze_hit', {label:'Blazing Courage', melee:true, dmg:17, stun:'heavy', stunT:0.8, kb:5, up:0.15, aoe:true, cat:'Fire', guardDmg:60, shake:0.3, hitstop:0.05, root:'jj_blazing'});
+jj('jj_blazing', 'Blazing Courage', {pose:'cut', cd:8, w:0.22, cat:'Fire', onStart(r){ spawnSfx(r.parts.head.p, '焦眉之赳', 'red'); },
+  onActive(r){ const L = jxL(r, 'jj_blazing'), T = nxTarget(r, 5), f = nxDir(r, T), p = r.core.p, R = L >= 2 ? 3.8 : 3.0; jjFace(r, T);
+    for(let i = 0; i <= 14; i++){ const a = -0.9 + i*1.8/14, g = jxRot(f, a); for(let s = 0.8; s < R; s += 0.7) emitParticles(p.x + g.x*s, p.y + 0.3 + Math.sin(i*0.4)*0.3, p.z + g.z*s, 1, {speed:1, up:1.5, color:Math.random() < 0.5 ? '#ff7a2a' : '#ffd23f', size:0.4, life:0.45, gravity:-2}); }
+    spawnCuts(JJV(p.x + f.x*1.5, p.y + 0.4, p.z + f.z*1.5), 4, '#ff7a2a', 2.2);
+    jxCone(r, f, R, 0.15, ATTACKS.jj_blaze_hit, (e) => addEntity(new KxDot(r, e, 2.5, 3, '#ff7a2a', '炎')));
+    if(L >= 3) addEntity(new KxRunner(r, JJV(p.x + f.x, jxGroundY(r), p.z + f.z), {dir:f, speed:12, range:7, life:0.8, r:1.1, def:ATTACKS.jj_blaze_hit, ghost:true, pierce:true,
+      build(){ const g = new THREE.Group(); g.add(jjMesh(jjGeo(new THREE.ConeGeometry(0.6, 1.6, 10, 1, true)), jjGlow('#ff7a2a', 0.7))); g.children[0].position.y = 0.8; return g; },
+      onHit(e){ kxDmgAs(ATTACKS.jj_blaze_hit, 8, () => resolveHit(r, e, ATTACKS.jj_blaze_hit, e.parts.torso, f.clone())); },
+      tick(U){ emitParticles(U.pos.x, U.pos.y + 0.5, U.pos.z, 2, {speed:1, up:2, color:'#ff7a2a', size:0.35, life:0.4, gravity:-1}); }})); }},
+  AI.melee, ['Wide Swing', 'Reach 3.8 m instead of 3 m'], ['Fire Wave', 'A wave of fire runs onward']);
+
+/* ---------- 18. Glückverheißende Bestie: Ryu (Takuma Ino) ---------- */
+jjHit('jj_ryu_hit', {label:'Ryu', dmg:19, stun:'ragdoll', kb:7, up:0.3, aoe:true, cat:'Shikigami', shake:0.3, root:'jj_ryu'});
+jj('jj_ryu', 'Auspicious Beasts: Ryu', {pose:'castBoth', cd:10, w:0.3, cat:'Shikigami', onStart(r){ spawnSfx(r.parts.head.p, '竜', 'mint'); },
+  onActive(r){ const L = jxL(r, 'jj_ryu'), T = nxTarget(r, 24); if(!T) return; const n = L >= 3 ? 2 : 1;
+    for(let d = 0; d < n; d++){ const hist = [], segs = [];
+      addEntity(new KxRunner(r, JJV(r.core.p.x, r.core.p.y + 2.2, r.core.p.z), {dir:jxRot(nxDir(r, T), d ? 0.9 : -0.9), target:T, turn:L >= 2 ? 5 : 3.5, speed:L >= 2 ? 15 : 12, range:40, life:2.6, fly:true, ghost:true, r:1.0, delay:d*0.2,
+        build(){ const g = new THREE.Group(); const h = jjMesh(jjGeo(new THREE.ConeGeometry(0.35, 0.9, 10)), jjGlow('#3fd3f0', 0.9)); h.rotation.x = Math.PI/2; g.add(h);
+          for(let i = 0; i < 10; i++){ const s = jjMesh(jjGeo(new THREE.SphereGeometry(0.3 - i*0.02, 10, 8)), jjGlow(i % 2 ? '#3fa8ff' : '#9fe8ff', 0.75)); scene.add(s); segs.push(s); } return g; },
+        tick(U){ hist.unshift(U.pos.clone().add(JJV(0, Math.sin(U.t*14)*0.25, 0))); if(hist.length > 40) hist.pop(); segs.forEach((s, i) => { const q = hist[Math.min(hist.length - 1, (i + 1)*3)]; if(q) s.position.copy(q); }); if(Math.random() < 0.6) emitParticles(U.pos.x, U.pos.y, U.pos.z, 1, {speed:0.5, color:'#9fe8ff', size:0.2, life:0.4, gravity:2}); },
+        onHit(e, U){ U.t = 99; },
+        onEnd(U){ blastAt(r, U.pos.x, U.pos.y, U.pos.z, 2.4, ATTACKS.jj_ryu_hit); emitParticles(U.pos.x, U.pos.y, U.pos.z, 60, {speed:5, up:3, color:Math.random() < 0.5 ? '#3fa8ff' : '#ffffff', size:0.3, life:0.6, gravity:-8}); spawnShock(U.pos.x, U.pos.z, 3, '#3fd3f0'); ssS('splash', {gain:0.8});
+          for(const e of enemiesOf(r)) if(hdist(e.core.p, U.pos) < 3) e.buffs.slowed = Math.max(e.buffs.slowed || 0, 2); },
+        onGone(){ for(const s of segs){ scene.remove(s); s.geometry.dispose(); s.material.dispose(); } }})); } }},
+  AI.mid, ['Swift Dragon', 'Faster and turns more sharply'], ['Twin Dragons', 'Two dragons attack']);
+
+/* ---------- 19. Glückverheißende Bestie: Kaichi ---------- */
+jjHit('jj_kaichi_hit', {label:'Kaichi', dmg:6, stun:'light', stunT:0.4, kb:1.5, aoe:true, cat:'Shikigami', root:'jj_kaichi'});
+jj('jj_kaichi', 'Auspicious Beasts: Kaichi', {pose:'cast', cd:9, w:0.25, cat:'Shikigami', onStart(r){ spawnSfx(r.parts.head.p, '獬豸', 'mint'); },
+  onActive(r){ const L = jxL(r, 'jj_kaichi'), T = nxTarget(r, 8), f = nxDir(r, T), p = r.core.p; jjFace(r, T);
+    const g = new THREE.Group(), hd = jjToon(GEO.ball, '#e8e2d4', 0.4, 0.38, 0.5); g.add(hd); const horn = jjToon(GEO.cone, '#ffd23f', 0.08, 0.5, 0.08); horn.position.set(0, 0.4, 0.2); horn.rotation.x = 0.5; g.add(horn);
+    g.rotation.y = Math.atan2(f.x, f.z); jjProp(g, 0.8, (P, gg, k) => { gg.position.set(r.core.p.x + f.x*1.0, r.core.p.y + 0.6 + Math.sin(k*3)*0.1, r.core.p.z + f.z*1.0); gg.scale.setScalar(k < 0.15 ? k/0.15 : k > 0.8 ? (1 - k)/0.2 : 1); });
+    for(let i = 0; i < 40; i++){ const s = 1 + Math.random()*5.5, sp = (Math.random() - 0.5)*s*0.7; emitParticles(p.x + f.x*s - f.z*sp, p.y + 0.6 + (Math.random() - 0.5)*0.5, p.z + f.z*s + f.x*sp, 1, {speed:1, color:Math.random() < 0.5 ? '#e6f6ff' : '#9fe8ff', size:0.45, life:0.6, gravity:-0.5}); }
+    jjCone(r, f, 6, '#e6f6ff', 0.4);
+    jxCone(r, f, 6.5, 0.5, ATTACKS.jj_kaichi_hit, (e) => { e.buffs.confused = Math.max(e.buffs.confused || 0, L >= 2 ? 3.5 : 2.4); if(L >= 3) e.buffs.slowed = Math.max(e.buffs.slowed || 0, 2.5); spawnSfx(e.parts.head.p, '盲', 'ink'); }); }},
+  (c) => c.d < 6 ? (c.near >= 2 ? 1.35 : 1.05) : 0, ['Thick Mist', 'Blinds for 3.5 s instead of 2.4 s'], ['Heavy Mist', 'Blinded enemies are also slowed']);
+
+/* ---------- 20. Raummanipulation (Ui Ui) ---------- */
+jjHit('jj_uiui_hit', {label:'Ui Ui', dmg:5, stun:'heavy', stunT:0.7, kb:0, cat:'Space', root:'jj_uiui'});
+jj('jj_uiui', 'Space Manipulation: Ui Ui', {pose:'castBoth', cd:12, w:0.25, cat:'Space', onStart(r){ spawnSfx(r.parts.head.p, '転移', 'gold'); },
+  onActive(r){ const L = jxL(r, 'jj_uiui'), T = nxTarget(r, 9); if(!T) return; const f = nxDir(r, T), from = T.core.p.clone();
+    let [x, z] = jjInArena(from.x + f.x*12, from.z + f.z*12); if(typeof mapSolidAt === 'function' && mapSolidAt(x, jxGroundY(T) + 1, z)) [x, z] = jjInArena(from.x - f.z*8, from.z + f.x*8);
+    for(const q of [from, JJV(x, from.y, z)]){ avRing(q.clone(), '#ffd23f', 2.4, 0.4); emitParticles(q.x, q.y, q.z, 40, {speed:3, color:Math.random() < 0.5 ? '#ffd23f' : '#ffffff', size:0.3, life:0.5, gravity:0, drag:2}); }
+    teleportRagdoll(T, x, jxGroundY(T) + (L >= 3 ? 4.5 : T.standH), z, false); if(hittable(T, ATTACKS.jj_uiui_hit)) resolveHit(r, T, ATTACKS.jj_uiui_hit, T.parts.torso, f.clone());
+    if(L >= 2) T.buffs.slowed = Math.max(T.buffs.slowed || 0, 3); spawnSfx(T.parts.head.p, '？！', 'ink'); ssS('portal', {gain:0.7}); }},
+  (c, r) => c.d < 7 ? ((r.hp < r.maxHp*0.45 || c.near >= 2) ? 1.4 : 0.8) : 0, ['Disorientation', 'The target is slowed after the teleport'], ['Drop', 'The target arrives high in the air and falls']);
+
+/* ---------- 21. Flügelkönig (Eso) ---------- */
+jjHit('jj_wing_hit', {label:'Wing King', dmg:11, stun:'heavy', stunT:0.5, kb:4, aoe:true, cat:'Blood', shake:0.2, root:'jj_wingking'});
+jj('jj_wingking', 'Wing King', {pose:'spin', side:'B', cd:11, w:0.2, cat:'Blood', onStart(r){ spawnSfx(r.parts.head.p, '翼王', 'red'); },
+  onActive(r){ const L = jxL(r, 'jj_wingking'), R = L >= 2 ? 4.2 : 3.4; const g = new THREE.Group();
+    for(const s of [0, Math.PI]){ const w = new THREE.Group(); for(let i = 0; i < 5; i++){ const b = jjMesh(GEO.box, jjBasic(i % 2 ? '#b3122a' : '#ff1f3d', 0.9), R/5, 0.05, 0.35 - i*0.04); b.position.set((i + 0.5)*R/5, 0, -i*0.08); w.add(b); } w.rotation.y = s; g.add(w); }
+    jjProp(g, 0.9, (P, gg, k) => { gg.position.set(r.core.p.x, r.core.p.y + 0.3, r.core.p.z); gg.rotation.y = k*Math.PI*4; gg.scale.setScalar(k < 0.1 ? k/0.1 : 1); if(Math.random() < 0.8) emitParticles(r.core.p.x + Math.cos(k*25)*R, r.core.p.y + 0.3, r.core.p.z + Math.sin(k*25)*R, 2, {speed:1, color:'#b3122a', size:0.25, life:0.4, gravity:-4}); });
+    for(const t of [0.15, 0.55]) after(t, () => { if(!alive(r)) return; const p = r.core.p; for(const e of enemiesOf(r)) if(hdist(e.core.p, p) < R && hittable(e, ATTACKS.jj_wing_hit)){ const hp0 = e.hp; resolveHit(r, e, ATTACKS.jj_wing_hit, e.parts.torso, nxDir(r, e)); spawnCuts(e.parts.torso.p, 2, '#ff1f3d');
+      if(L >= 3 && e.hp < hp0){ const h = Math.round((hp0 - e.hp)*0.3); r.hp = Math.min(r.maxHp, r.hp + h); } } }); }},
+  AI.aoe, ['Wide Wings', 'Radius 4.2 m instead of 3.4 m'], ['Blood Feast', 'Heals 30 % of the damage dealt']);
+
+/* ---------- 22. Raue Energie (Hakari) ---------- */
+jjHit('jj_rough_hit', {label:'Rough Energy', melee:true, dmg:3.0, stun:'light', stunT:0.3, kb:0.3, cat:'Martial Arts', guardDmg:15, root:'jj_roughenergy'});
+jjHit('jj_rough_fin', {label:'Rough Energy Finisher', melee:true, dmg:5, stun:'ragdoll', kb:7, up:0.25, cat:'Martial Arts', shake:0.25, root:'jj_roughenergy'});
+jj('jj_roughenergy', 'Rough Energy Barrage', {pose:'barrage', cd:7, w:0.12, cat:'Martial Arts', onStart(r){ spawnSfx(r.parts.head.p, '粗いエネルギー', 'gold'); },
+  onActive(r){ const L = jxL(r, 'jj_roughenergy'), T = nxTarget(r, 3.5), f = nxDir(r, T), n = L >= 2 ? 6 : 4, jack = Math.random() < (L >= 3 ? 0.45 : 0.25); jjFace(r, T);
+    if(jack){ spawnSfx(r.parts.head.p, 'JACKPOT', 'gold'); emitParticles(r.core.p.x, r.core.p.y + 1, r.core.p.z, 30, {speed:3, up:2, color:'#5dff9b', size:0.3, life:0.6, gravity:-3}); }
+    for(let i = 0; i < n; i++) after(i*0.12, () => { if(!alive(r)) return; const fin = i === n - 1, def = fin ? ATTACKS.jj_rough_fin : ATTACKS.jj_rough_hit, p = r.core.p;
+      for(let k = 0; k < 3; k++){ const c = jjMesh(GEO.box, jjBasic(Math.random() < 0.5 ? '#5dff9b' : '#ffd23f'), 0.12, 0.12, 0.12); const v = JJV(f.x*6 + (Math.random() - 0.5)*3, 2 + Math.random()*2, f.z*6 + (Math.random() - 0.5)*3); c.position.set(p.x + f.x, p.y + 0.4, p.z + f.z);
+        jjProp(c, 0.5, (P, g, kk) => { g.position.addScaledVector(v, 0.016); v.y -= 0.3; g.rotation.x += 0.3; g.rotation.y += 0.2; }); }
+      r.addVelocity({x:f.x*1.6, y:0, z:f.z*1.6}); jxCone(r, f, 2.9, 0.3, def, null); if(jack) kxDmgAs(def, def.dmg*0.6, () => jxCone(r, f, 2.9, 0.3, def, null)); }); }},   // läuft beim Schlagen mit
+  AI.melee, ['Longer Rush', '6 instead of 4 punches'], ['Lucky Streak', 'Jackpot (extra hits) 45 % instead of 25 %']);
+
+/* ---------- 23. Herzfang (Larue) ---------- */
+jjHit('jj_heart_hit', {label:'Heart Catch', dmg:8, stun:'light', stunT:0.4, kb:1, cat:'Soul', root:'jj_heartcatch'});
+function jjHeart(){ const g = new THREE.Group(); for(const s of [-1, 1]){ const b = jjMesh(GEO.ball, jjGlow('#ff6ab0', 0.95), 0.2, 0.2, 0.16); b.position.set(s*0.13, 0.08, 0); g.add(b); } const c = jjMesh(GEO.cone, jjGlow('#ff6ab0', 0.95), 0.26, 0.32, 0.16); c.rotation.z = Math.PI; c.position.y = -0.12; g.add(c); return g; }
+jj('jj_heartcatch', 'Heart Catch', {pose:'cast', cd:10, w:0.22, cat:'Soul', onStart(r){ spawnSfx(r.parts.head.p, '♥', 'red'); },
+  onActive(r){ const L = jxL(r, 'jj_heartcatch'), T = nxTarget(r, 18); if(!T) return; const o = jxHand(r);
+    addEntity(new JxBolt(r, o, T.parts.torso.p.clone().sub(o), {speed:12, homing:T, turn:6, life:2.2, r:0.7, def:ATTACKS.jj_heart_hit, trail:'#ff6ab0', mesh:jjHeart, spin:0.2,
+      onHit(e){ const take = Math.min(e.ce || 0, L >= 2 ? 35 : 22); e.ce -= take; r.ce = Math.min(100, (r.ce || 0) + take); e.buffs.confused = Math.max(e.buffs.confused || 0, 1.2);
+        if(L >= 3){ r.hp = Math.min(r.maxHp, r.hp + 12); spawnSfx(r.parts.head.p, '+12', 'mint'); } spawnSfx(e.parts.head.p, `−${Math.round(take)} CE`, 'red');
+        const h = jjHeart(); jjProp(h, 0.7, (P, g, k) => { const a = e.parts.torso.p, b = r.parts.torso.p; g.position.set(lerp(a.x, b.x, k), lerp(a.y, b.y, k) + Math.sin(k*Math.PI), lerp(a.z, b.z, k)); g.rotation.y += 0.2; }); }})); }},
+  (c, r) => c.d < 16 ? (r.ce < 60 ? 1.3 : 0.9) : 0, ['Greedy Heart', 'Steals 35 instead of 22 CE'], ['Lovesick', 'You also heal 12 HP']);
+
+/* ---------- 24. Haie (Dagon) ---------- */
+jjHit('jj_shark_hit', {label:'Shark', dmg:7, stun:'light', stunT:0.45, kb:2.5, up:0.3, cat:'Water', root:'jj_sharks'});
+jj('jj_sharks', 'Shikigami Sharks', {pose:'castBoth', cd:9, w:0.25, cat:'Water', onStart(r){ spawnSfx(r.parts.head.p, '鮫', 'mint'); },
+  onActive(r){ const L = jxL(r, 'jj_sharks'), T = nxTarget(r, 20), n = L >= 2 ? 4 : 3, f = nxDir(r, T), y = jxGroundY(r);
+    for(let i = 0; i < n; i++){ addEntity(new KxRunner(r, JJV(r.core.p.x, y, r.core.p.z), {dir:jxRot(f, (i - (n - 1)/2)*0.45), target:T, turn:4, speed:11, range:22, life:2.4, delay:i*0.08, r:0.9,
+      build(){ const g = new THREE.Group(); const fin = jjToon(GEO.cone, '#3a4a5a', 0.25, 0.7, 0.08); fin.position.y = 0.3; g.add(fin); const rip = jjMesh(jjGeo(new THREE.RingGeometry(0.3, 0.45, 16)), jjBasic('#bfe9ff', 0.6)); rip.rotation.x = -Math.PI/2; rip.position.y = 0.04; g.add(rip); return g; },
+      tick(U){ if(Math.random() < 0.6) emitParticles(U.pos.x, U.pos.y + 0.1, U.pos.z, 1, {speed:1, up:1.5, color:'#9fe8ff', size:0.2, life:0.35, gravity:4}); },
+      onHit(e){ resolveHit(r, e, ATTACKS.jj_shark_hit, e.parts.torso, JJV(0, 1, 0)); if(L >= 3) addEntity(new KxDot(r, e, 2.5, 3, '#ff2a4a', '咬'));
+        const jaw = new THREE.Group(); for(const s of [-1, 1]){ const j = jjToon(GEO.cone, '#3a4a5a', 0.45, 0.9, 0.3); j.rotation.z = s > 0 ? 0 : Math.PI; j.position.y = s*0.35; jaw.add(j); }
+        jjProp(jaw, 0.5, (P, g, k) => { g.position.set(e.core.p.x, jxGroundY(e) + Math.sin(k*Math.PI)*1.8, e.core.p.z); g.children[0].rotation.x = -k; g.children[1].rotation.x = k; });
+        emitParticles(e.core.p.x, e.core.p.y, e.core.p.z, 25, {speed:3, up:3, color:'#9fe8ff', size:0.3, life:0.5, gravity:-8}); ssS('splash', {gain:0.6}); }})); } }},
+  AI.mid, ['Bigger School', '4 instead of 3 sharks'], ['Bleeding Bites', 'Bites leave bleeding wounds']);
+
+/* ---------- 25. Körper-Abstoßung (Mahito) ---------- */
+jjHit('jj_repel_hit', {label:'Body Repel', dmg:9, stun:'heavy', stunT:0.6, kb:5, up:0.15, aoe:true, cat:'Soul', root:'jj_bodyrepel'});
+jj('jj_bodyrepel', 'Body Repel', {pose:'guard', side:'B', cd:8, w:0.1, cat:'Soul', onStart(r){ spawnSfx(r.parts.head.p, '体', 'ink'); },
+  onActive(r){ const L = jxL(r, 'jj_bodyrepel'), R = L >= 2 ? 2.8 : 2.2, p = r.parts.torso.p, g = new THREE.Group();
+    for(let i = 0; i < 14; i++){ const a = i/14*6.28, el = (Math.random() - 0.3)*0.9, s = jjToon(GEO.cone, '#b8a8b0', 0.12, R, 0.12); s.position.set(Math.cos(a)*R*0.5*Math.cos(el), Math.sin(el)*R*0.5, Math.sin(a)*R*0.5*Math.cos(el)); s.lookAt(s.position.clone().multiplyScalar(2)); s.rotateX(Math.PI/2); g.add(s); }
+    jjProp(g, 0.5, (P, gg, k) => { gg.position.copy(r.parts.torso.p); gg.scale.setScalar(k < 0.2 ? k/0.2 : 1 - (k - 0.2)/0.8); });
+    blastAt(r, p.x, p.y, p.z, R, ATTACKS.jj_repel_hit, {breakEnv:false}); r.addBuff('jjrepel', L >= 3 ? 3 : 1.2); ssS('flesh', {gain:0.7}); }},
+  (c) => c.d < 2.6 ? 1.3 : 0, ['Longer Spikes', 'Radius 2.8 m instead of 2.2 m'], ['Thorny Body', 'Attackers are spiked for 3 s']);
+
+/* ---------- 26. Fluchwort: Lauf! (Inumaki) ---------- */
+jjHit('jj_run_hit', {label:'Run!', dmg:4, stun:'none', kb:3, cat:'Cursed Speech', root:'jj_run'});
+jj('jj_run', 'Cursed Word: Run!', {pose:'cast', cd:12, w:0.2, cat:'Cursed Speech', onStart(r){ spawnSfx(r.parts.head.p, '逃げろ', 'ink'); },
+  onActive(r){ const L = jxL(r, 'jj_run'), R = L >= 3 ? 12 : 9, p = r.core.p, dur = L >= 2 ? 2.6 : 1.8;
+    for(let i = 0; i < 3; i++) after(i*0.1, () => avRing(JJV(p.x, p.y + 0.5, p.z), '#e8e2d4', 3 + i*3, 0.35));
+    for(const e of enemiesOf(r)) if(hdist(e.core.p, p) < R && hittable(e, ATTACKS.jj_run_hit)){ resolveHit(r, e, ATTACKS.jj_run_hit, e.parts.torso, nxDir(r, e)); e.buffs.confused = Math.max(e.buffs.confused || 0, dur); e.endAttack && e.endAttack(true);
+      const d = nxDir(r, e); e.addVelocity({x:d.x*6, y:0.5, z:d.z*6}); spawnSfx(e.parts.head.p, '逃', 'ink'); }
+    r.hp = Math.max(1, r.hp - 2); }},
+  (c) => c.near >= 2 || (c.hp < 0.4 && c.d < 5) ? 1.3 : 0, ['Lingering Command', 'Enemies flee for 2.6 s instead of 1.8 s'], ['Loud Voice', 'Reaches 12 m instead of 9 m']);
+
+/* ---------- 27. Rikas Katana (Yuta) ---------- */
+jjHit('jj_yuta_hit', {label:'Rika Katana', melee:true, dmg:18, stun:'heavy', stunT:0.7, kb:3, ignoreAura:true, cat:'Cuts', hitstop:0.06, shake:0.25, guardDmg:60, root:'jj_yutaslash'});
+jj('jj_yutaslash', 'Rika Katana: Draw Cut', {pose:'cut', cd:9, w:0.15, cat:'Cuts', onStart(r){ spawnSfx(r.parts.head.p, '抜刀', 'ink'); },
+  onActive(r){ const L = jxL(r, 'jj_yutaslash'), T = nxTarget(r, L >= 2 ? 11 : 8), f = nxDir(r, T), o = r.core.p.clone(), len = rayLen(o, f, (T ? hdist(T.core.p, o) + 2 : 6), o.y);
+    const slash = (from, dir, l) => { for(const e of lineHits(r, from, dir, l, 0.7, ATTACKS.jj_yuta_hit)) resolveHit(r, e, ATTACKS.jj_yuta_hit, e.parts.torso, dir.clone()); for(let s = 0.5; s < l; s += 0.9) spawnCuts(from.clone().addScaledVector(dir, s).add(JJV(0, 0.4, 0)), 1, s % 2 > 1 ? '#b04aff' : '#ffffff', 1.1);
+      jjBeam(from.clone().add(JJV(0, 0.3, 0)), from.clone().addScaledVector(dir, l).add(JJV(0, 0.3, 0)), '#b04aff', 0.06, 0.3); };
+    slash(o, f, len); teleportRagdoll(r, o.x + f.x*len, o.y, o.z + f.z*len, false); r.yaw = Math.atan2(-f.x, -f.z); if(r.stGhost !== undefined) r.stGhostT = 0.3;
+    if(L >= 3) after(0.35, () => { if(alive(r)){ const o2 = r.core.p.clone(), b = f.clone().negate(); slash(o2, b, len); teleportRagdoll(r, o2.x + b.x*len, o2.y, o2.z + b.z*len, false); } }); }},
+  (c) => c.d > 1.5 && c.d < 8 ? 1.25 : 0, ['Long Draw', 'Reaches 11 m instead of 8 m'], ['Return Cut', 'Cuts back through on the way back']);
+
+/* ---------- 28. Reiki-Panzer (Takuma Ino) ---------- */
+jjHit('jj_reiki_hit', {label:'Reiki Recoil', dmg:6, stun:'light', stunT:0.4, kb:3, cat:'Shikigami', root:'jj_reiki'});
+jj('jj_reiki', 'Auspicious Beasts: Reiki', {pose:'guard', side:'B', cd:15, w:0.2, cat:'Shikigami', onActive(r){ const L = jxL(r, 'jj_reiki'), dur = L >= 2 ? 5 : 3.5; r.addBuff('jjreiki', dur); r.cs.reikiMelee = L >= 3;
+    spawnSfx(r.parts.head.p, '霊亀', 'mint'); const sh = jjMesh(jjGeo(new THREE.SphereGeometry(1.35, 12, 8, 0, Math.PI*2, 0, Math.PI/2)), (() => { const m = new THREE.MeshBasicMaterial({color:'#5dff9b', wireframe:true, transparent:true, opacity:0.55}); m.userData.jj = 1; return m; })());
+    jjProp(sh, dur, (P, g, k) => { if(!alive(r) || !r.buffs.jjreiki){ g.visible = false; return; } g.position.set(r.core.p.x, jxGroundY(r), r.core.p.z); g.rotation.y += 0.01; g.scale.setScalar(Math.min(1, P.t*5)*(1 + Math.sin(P.t*8)*0.02)); }); }},
+  (c) => c.d > 5 && c.d < 20 ? 1.0 : (c.hp < 0.5 ? 0.9 : 0.2), ['Ancient Shell', 'Lasts 5 instead of 3.5 s'], ['Full Shell', 'Also reflects close-range attacks']);
+
+/* ---------- 29. Fluchpuppen (Yaga) ---------- */
+jjHit('jj_yaga_hit', {label:'Cursed Corpse', melee:true, dmg:7, stun:'light', stunT:0.45, kb:2.5, cat:'Puppet', root:'jj_yaga'});
+jjHit('jj_yaga_boom', {label:'Corpse Burst', dmg:6, stun:'heavy', stunT:0.5, kb:4, aoe:true, cat:'Puppet', root:'jj_yaga'});
+function jjCorpse(){ const g = new THREE.Group(), C = ['#c9a46a', '#e8e2d4', '#8a6a3a'][Math.floor(Math.random()*3)]; const b = jjToon(GEO.ball, C, 0.35, 0.35, 0.3); b.position.y = 0.4; g.add(b); const h = jjToon(GEO.ball, C, 0.28, 0.26, 0.26); h.position.y = 0.85; g.add(h);
+  for(const s of [-1, 1]){ const e = jjToon(GEO.ball, C, 0.1, 0.1, 0.06); e.position.set(s*0.2, 1.08, 0); g.add(e); const st = jjMesh(GEO.box, jjBasic('#0d0b14'), 0.02, 0.12, 0.02); st.position.set(s*0.08, 0.87, 0.25); g.add(st); } return g; }
+jj('jj_yaga', 'Cursed Corpse Brawlers', {pose:'castBoth', side:'B', cd:11, w:0.3, cat:'Puppet', onStart(r){ spawnSfx(r.parts.head.p, '呪骸', 'ink'); },
+  onActive(r){ const L = jxL(r, 'jj_yaga'), E = enemiesOf(r).filter(e => hdist(e.core.p, r.core.p) < 18), n = L >= 2 ? 4 : 3, y = jxGroundY(r); if(!E.length) return;
+    for(let i = 0; i < n; i++){ const tg = E[i % E.length], a = i/n*6.28;
+      addEntity(new KxRunner(r, JJV(r.core.p.x + Math.cos(a)*1.2, y, r.core.p.z + Math.sin(a)*1.2), {dir:nxDir(r, tg), target:tg, turn:6, speed:8, range:24, life:3.2, delay:i*0.1, r:0.8, build:jjCorpse,
+        anim(U, g){ g.children[0].position.y = 0.4 + Math.abs(Math.sin(U.t*14))*0.12; },
+        onHit(e, U){ resolveHit(r, e, ATTACKS.jj_yaga_hit, e.parts.torso, U.dir.clone()); spawnSfx(e.parts.head.p, 'ポカッ', 'ink');
+          if(L >= 3){ blastAt(r, U.pos.x, U.pos.y + 0.6, U.pos.z, 1.8, ATTACKS.jj_yaga_boom, {breakEnv:false}); emitParticles(U.pos.x, U.pos.y + 0.6, U.pos.z, 30, {speed:4, color:'#e8e2d4', size:0.3, life:0.5, gravity:-6}); } }})); } }},
+  AI.mid, ['More Corpses', '4 instead of 3 brawlers'], ['Volatile Stuffing', 'The corpses burst on impact']);
+
+/* ---------- 30. Klebebomben (Hazenoki) ---------- */
+jjHit('jj_sticky_boom', {label:'Sticky Bomb', dmg:8, stun:'ragdoll', kb:6, up:0.3, aoe:true, cat:'Fire', shake:0.25, root:'jj_hazenoki'});
+jj('jj_hazenoki', 'Sticky Bombs', {pose:'cast', cd:9, w:0.22, cat:'Fire', onStart(r){ spawnSfx(r.parts.head.p, '爆', 'red'); },
+  onActive(r){ const L = jxL(r, 'jj_hazenoki'), T = nxTarget(r, 16), n = L >= 2 ? 4 : 3, o = jxHand(r), R = L >= 3 ? 2.6 : 1.9;
+    for(let i = 0; i < n; i++){ const aim = T ? T.parts.torso.p.clone().add(JJV((Math.random() - 0.5)*2.5, 0, (Math.random() - 0.5)*2.5)) : o.clone().addScaledVector(facingVec(r), 8);
+      const d = aim.clone().sub(o), dist = Math.hypot(d.x, d.z), v = JJV(d.x, 0, d.z).normalize().multiplyScalar(11); v.y = Math.max(2, dist/11*9.8*0.5 + (aim.y - o.y)/(dist/11 || 1));
+      after(i*0.1, () => { if(!alive(r)) return; let stuck = null, at = null;
+        const blob = jjMesh(GEO.ball, jjBasic('#d6ff3a'), 0.18, 0.15, 0.18);
+        addEntity(new JxBolt(r, jxHand(r), v.clone(), {speed:v.length(), grav:9.8, life:2, r:0.7, mesh:() => blob,
+          onHit(e){ stuck = e; },
+          onBoom(p){ at = p; const off = stuck && alive(stuck) ? p.clone().sub(stuck.core.p) : null; const m2 = jjMesh(GEO.ball, jjBasic('#d6ff3a'), 0.22, 0.16, 0.22);
+            jjProp(m2, 1.2, (P, g, k) => { if(stuck && alive(stuck)) g.position.copy(stuck.core.p).add(off); else g.position.copy(at); g.scale.setScalar(1 + Math.sin(P.t*(10 + P.t*20))*0.25); g.material.color.set(Math.sin(P.t*(10 + P.t*30)) > 0 ? '#ff3b3b' : '#d6ff3a'); });
+            after(1.2, () => { const q = stuck && alive(stuck) ? stuck.core.p.clone() : at; blastAt(r, q.x, q.y, q.z, R, ATTACKS.jj_sticky_boom); spawnShock(q.x, q.z, R*1.3, '#ffb43f'); emitParticles(q.x, q.y, q.z, 40, {speed:5, up:2, color:Math.random() < 0.5 ? '#ff7a2a' : '#ffd23f', size:0.35, life:0.5, gravity:-3}); ssS('explosion', {gain:0.5}); }); }})); }); } }},
+  AI.mid, ['More Bombs', '4 instead of 3 bombs'], ['Bigger Blast', 'Explosion radius 2.6 m instead of 1.9 m']);
+
+/* ---------- Buffs der neuen Techniken ---------- */
+const _jjTick = jxTick;
+jxTick = function(r, dt){ _jjTick(r, dt); const t = r.parts.torso.p;
+  if(r.buffs.jjinsect && Math.random() < 0.25) emitParticles(t.x + (Math.random() - 0.5)*0.6, t.y + (Math.random() - 0.5)*0.8, t.z + (Math.random() - 0.5)*0.6, 1, {speed:0.3, color:Math.random() < 0.5 ? '#3a5a2a' : '#9acd32', size:0.22, life:0.4, gravity:0});
+  if(r.buffs.jjdomamp && Math.random() < 0.3) emitParticles(t.x, t.y, t.z, 1, {speed:1.2, up:0.5, color:'#e6f6ff', size:0.18, life:0.4, gravity:0});
+  if(r.buffs.jjwicker) r.slow = Math.min(r.slow, 0.55);
+  if(r.buffs.jjadapt && Math.random() < 0.08) spawnSfx(r.parts.head.p, '適応', 'gold'); };
+const _jjMod = jxModifyHit;
+jxModifyHit = function(att, tgt, def, mod){ _jjMod(att, tgt, def, mod);
+  if(att.buffs.jjinsect && def.melee) mod.dmg *= 1.25;
+  if(att.buffs.jjdomamp && def.melee && tgt){ kxSeal(tgt, att.cs.domampSeal || 3); if(Math.random() < 0.4) spawnSfx(tgt.parts.head.p, '封', 'ink'); } };
+const _jjInc = jxIncoming;
+jxIncoming = function(tgt, att, def, mod){ _jjInc(tgt, att, def, mod);
+  if(tgt.buffs.jjinsect){ mod.dmg *= 0.65; if(mod.stun === 'light') mod.stun = 'none'; if(tgt.cs.insectThorns && att && att !== tgt && def.melee) after(0, () => { if(alive(att)){ applyDamage(att, Math.max(1, Math.round(mod.dmg*0.3)), 'hit', att.parts.torso.p); att.lastHitBy = tgt; spawnSfx(att.parts.head.p, '棘', 'ink'); } }); }
+  if(tgt.buffs.jjwicker){ mod.dmg *= 0.5; mod.stun = 'none'; mod.kb *= 0.2; }
+  if(tgt.buffs.jjdomamp && !def.melee) mod.dmg *= 0.6;
+  if(tgt.buffs.jjadapt) mod.dmg *= 0.7;
+  if(tgt.buffs.jjrepel && att && att !== tgt && def.melee) after(0, () => { if(alive(att) && hittable(att, ATTACKS.jj_repel_hit)) kxDmgAs(ATTACKS.jj_repel_hit, 6, () => resolveHit(tgt, att, ATTACKS.jj_repel_hit, att.parts.torso, nxDir(tgt, att))); });
+  if(tgt.buffs.jjreiki && att && att !== tgt && (!def.melee || tgt.cs.reikiMelee)){ const back = mod.dmg*0.7; mod.dmg -= back; mod.stun = mod.stun === 'ragdoll' ? 'light' : mod.stun;
+    after(0, () => { if(!alive(att) || !alive(tgt) || hdist(att.core.p, tgt.core.p) > 16) return; const o = tgt.parts.torso.p.clone();
+      addEntity(new JxBolt(tgt, o, att.parts.torso.p.clone().sub(o), {speed:22, homing:att, turn:8, life:1.2, r:0.7, color:'#5dff9b', size:0.25, trail:'#9fe8ff',
+        onHit(e){ kxDmgAs(ATTACKS.jj_reiki_hit, Math.max(3, Math.round(back)), () => resolveHit(tgt, e, ATTACKS.jj_reiki_hit, e.parts.torso, nxDir(tgt, e))); }})); spawnSfx(tgt.parts.head.p, '反', 'mint'); }); } };
+
+/* ---------- Einbindung: Pools, KI, Kopie, Sterne, Elemente, Klang, Turniere ---------- */
+for(const id of JJ_LIST){ NX_SCORE[id] = JX[id]; NX_COPYABLE.add(id); }
+NX_MOVES.push(...JJ_LIST);
+ALL_SCORE = null;
+Object.assign(ST_MOVES, {
+  jj_purple:['ce', 10], jj_ultracannon:['ce', 8], jj_wingking:['ce', 8], jj_piercing:['ce', 7], jj_ryu:['ce', 7], jj_disaster:['ce', 5], jj_sharks:['ce', 5], jj_hazenoki:['ce', 5],
+  jj_mahoraga:['str', 10], jj_rikaarm:['str', 8], jj_blazing:['str', 6], jj_roughenergy:['str', 5], jj_bloodmeteor:['str', 4],
+  jj_yutaslash:['spd', 7], jj_nue:['spd', 6], jj_nyoibo:['spd', 6], jj_tiger:['spd', 5], jj_manji:['spd', 3],
+  jj_insectarmor:['res', 7], jj_rootprison:['res', 6], jj_reiki:['res', 6], jj_wicker:['res', 5], jj_bodyrepel:['res', 4],
+  jj_domamp:['iq', 8], jj_yaga:['iq', 7], jj_blastaway:['iq', 6], jj_uiui:['iq', 6], jj_heartcatch:['iq', 5], jj_kaichi:['iq', 4], jj_run:['iq', 4],
+});
+Object.assign(SS_MOVE_ELEM, {
+  jj_purple:'gravity,soul', jj_nue:'bolt,beast', jj_tiger:'beast,shadow', jj_mahoraga:'blade,aid', jj_blastaway:'word', jj_ultracannon:'bolt,stone', jj_rootprison:'bind', jj_disaster:'fire',
+  jj_piercing:'blood', jj_bloodmeteor:'blood,stone', jj_nyoibo:'bolt,tempo', jj_insectarmor:'beast,aid', jj_rikaarm:'soul,fist', jj_manji:'fist,tempo', jj_wicker:'aid', jj_domamp:'soul,aid',
+  jj_blazing:'fire,blade', jj_ryu:'beast,ice', jj_kaichi:'beast', jj_uiui:'tempo', jj_wingking:'blood,blade', jj_roughenergy:'luck,fist', jj_heartcatch:'soul', jj_sharks:'beast',
+  jj_bodyrepel:'soul', jj_run:'word', jj_yutaslash:'blade,soul', jj_reiki:'aid,ice', jj_yaga:'soul,fist', jj_hazenoki:'fire',
+});
+Object.assign(MAV, {
+  jj_purple:{w:['riser', 'hum_up:0.6'], a:['implode', 'sub_drop', 'whoomp:0.8'], fx:'ultFlash'}, jj_nue:{w:['wing'], a:['crow:0.5', 'whoosh'], h:['thunder:0.6']}, jj_tiger:{a:['growl:0.7', 'whoosh'], h:['slash_heavy']},
+  jj_mahoraga:{w:['gong:0.6', 'riser:0.6'], a:['metal', 'whoosh_low'], h:['slash_heavy', 'rock']}, jj_blastaway:{a:['speech', 'whoomp'], fx:'pushRing'}, jj_ultracannon:{w:['riser', 'hum_up:0.5'], a:['beam', 'explosion:0.6']},
+  jj_rootprison:{a:['wood', 'creak:0.7'], h:['crunch:0.5']}, jj_disaster:{a:['fire', 'fire:0.7:0.9:0.15', 'fire:0.6:1.1:0.3']}, jj_piercing:{w:['hiss:0.5'], a:['beam:0.8', 'squelch:0.4']}, jj_bloodmeteor:{a:['whoosh_low'], h:['squelch', 'rock']},
+  jj_nyoibo:{a:['zap_low', 'whoosh'], h:['thunder:0.5']}, jj_insectarmor:{a:['crunch', 'chirp:0.5']}, jj_rikaarm:{w:['shriek:0.4'], a:['whoosh_low'], h:['rock', 'crunch']}, jj_manji:{a:['whoosh', 'whoosh:0.6:1.2:0.08'], h:['crunch:0.6']},
+  jj_wicker:{a:['wood', 'creak']}, jj_domamp:{a:['hum_up:0.5', 'chime:0.5']}, jj_blazing:{a:['fire', 'slash_heavy']}, jj_ryu:{a:['sea', 'whoosh']}, jj_kaichi:{a:['hiss', 'breath_out']}, jj_uiui:{a:['portal', 'ting']},
+  jj_wingking:{a:['whoosh', 'whoosh:0.8:0.9:0.2'], h:['squelch:0.5']}, jj_roughenergy:{a:['coins:0.5'], h:['crunch:0.5']}, jj_heartcatch:{a:['chime', 'giggle:0.4']}, jj_sharks:{a:['sea', 'splash:0.6']},
+  jj_bodyrepel:{a:['flesh', 'crunch']}, jj_run:{a:['speech', 'whoomp:0.6']}, jj_yutaslash:{w:['metal:0.4'], a:['slash_heavy', 'phase:0.5']}, jj_reiki:{a:['shield', 'sea:0.4']}, jj_yaga:{a:['plop', 'squeak:0.5']}, jj_hazenoki:{a:['plop', 'bubble:0.5']},
+});
+// Laufende Turniere: jede neue Technik geht an zwei passende Kämpfer (Wert reicht für die Anforderung)
+function jjMigrate(st){
+  if(!st || st.jj) return;
+  const ps = st.players.filter(p => Array.isArray(p.moves) && p.moves.length && p.status !== 'eliminated');
+  for(const id of JJ_LIST){ if(!ATTACKS[id] || ps.some(p => p.moves.includes(id))) continue; const M = stMove(id, false);
+    const cand = ps.filter(p => !p.moves.some(m => m.startsWith('jj_')) && (p[M.stat] || 0) >= M.th).sort(() => Math.random() - 0.5).slice(0, 2);
+    for(const p of cand){ p.moves[Math.floor(Math.random()*p.moves.length)] = id; p.hist && p.hist.push(`Learns ${ATTACKS[id].label}`); } }
+  st.jj = 1;
+}
+const _jjLoad = ssLoad; ssLoad = function(){ _jjLoad(); try{ jjMigrate(SS.st); ssSave(); }catch(e){ console.warn('JJ migrate', e); } };
+try{ if(SS.st) { jjMigrate(SS.st); ssSave(); } }catch(e){}
+try{ Object.assign(window.__arena, {JJ_LIST}); }catch(e){}
 
 requestAnimationFrame(frame);
 } // startGame
