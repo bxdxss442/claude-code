@@ -139,7 +139,7 @@ body{margin:0;background:var(--night);color:var(--panel);font-family:var(--f-bod
 @keyframes bubPop{from{scale:.4;}to{scale:1;}}
 @media (prefers-reduced-motion:reduce){.bub.pop{animation:none;}}
 /* Manga-Soundeffekte */
-.sfx{position:absolute;left:0;top:0;font-family:"Dela Gothic One","Hiragino Sans","Noto Sans JP",sans-serif;font-size:34px;color:var(--panel);-webkit-text-stroke:2.5px var(--ink);text-shadow:4px 4px 0 var(--ink);white-space:nowrap;letter-spacing:-.02em;}
+.sfx{position:absolute;left:0;top:0;font-family:"Dela Gothic One","Hiragino Sans","Noto Sans JP",sans-serif;font-size:26px;color:var(--panel);-webkit-text-stroke:2.5px var(--ink);text-shadow:4px 4px 0 var(--ink);white-space:nowrap;letter-spacing:-.02em;}
 .sfx[data-tone="red"]{color:#ff3b4f;}
 .sfx[data-tone="gold"]{color:#ffd23f;}
 .sfx[data-tone="mint"]{color:#7cf2c9;}
@@ -1625,7 +1625,10 @@ class Ragdoll{
     if(this.state === STATES.NORMAL || this.state === STATES.HEAVY_STUN){
       const upY = _v1.copy(UP).applyQuaternion(this.parts.pelvis.q).y;
       this.fallen = upY < 0.35 ? this.fallen + dt : 0;
-      if(this.fallen > 0.5){ this.fallen = 0; this.setState(STATES.RAGDOLL); bus.emit('log', `${this.name} toppled over`); }
+      // Selbst verursacht (eigener Move, Rolle, Dash – kein Treffer in den letzten 1,5 s)? Dann fängt sich die Figur, statt umzufallen.
+      const selfCaused = !this.ko && this.time - (this.lastHitT ?? -99) > 1.5 && !this.cs.airHeldBy;
+      if(selfCaused && upY < 0.6){ this.fallen = 0; this.selfRightT = Math.max(this.selfRightT || 0, 0.45); }
+      else if(this.fallen > 0.5){ this.fallen = 0; this.setState(STATES.RAGDOLL); bus.emit('log', `${this.name} toppled over`); }
     }
 
     if(this.state === STATES.GETUP){
@@ -2768,7 +2771,7 @@ function fallCheck(r){
   if(!r.grounded){ r.airTop = Math.max(r.airTop ?? y, y); return; }
   if(r.airTop !== undefined){
     const drop = r.airTop - y; r.airTop = undefined;
-    if(drop > 7 && !r.ko){
+    if(drop > 7 && !r.ko && (r.state === STATES.RAGDOLL || r.time - (r.lastHitT ?? -99) < 2.5)){   // eigene Sprünge/Moves: sauber landen, kein Sturz
       const dmg = Math.round((drop - 7)*2.2);
       r.cs.lastCause = 'Fall'; r.cs.lastCauseT = r.time;
       applyDamage(r, dmg, 'big', r.parts.torso.p); if(r.lastHitBy) r.lastHitBy.dmgDealt += dmg;
@@ -2933,8 +2936,8 @@ function spawnHitFx(pos, color, big){
   const s = sparkPool.acquire();
   s.position.copy(pos); s.material.color.set(color).lerp(_pc.set('#ffffff'), 0.5); s.material.rotation = Math.random()*Math.PI;
   s.userData.t = 0; s.userData.big = big; s.visible = true;
-  spawnInkBurst(pos, big);
-  if(big) spawnSfx(pos, HIT_SFX[Math.floor(Math.random()*HIT_SFX.length)]);
+  if(big || Math.random() < 0.35) spawnInkBurst(pos, big);   // weniger Tusche-Sterne bei kleinen Treffern
+  if(big && Math.random() < 0.45) spawnSfx(pos, HIT_SFX[Math.floor(Math.random()*HIT_SFX.length)]);
   emitParticles(pos.x, pos.y, pos.z, big ? 30 : 14, {speed:big ? 9 : 6, color, size:big ? 0.16 : 0.11, life:0.35, gravity:-8, drag:3});
   emitParticles(pos.x, pos.y, pos.z, big ? 10 : 4, {speed:3, color:'#ffffff', size:0.28, life:0.18, gravity:0, drag:6});
 }
@@ -2942,7 +2945,7 @@ function updateSparks(dt){
   for(const s of [...sparkPool.active]){
     s.userData.t += dt; const k = s.userData.t/0.14;
     if(k >= 1){ sparkPool.release(s); continue; }
-    s.scale.setScalar((s.userData.big ? 1.5 : 0.85)*(0.3 + 0.7*Math.sqrt(k))); s.material.opacity = 0.9*(1 - k);
+    s.scale.setScalar((s.userData.big ? 1.1 : 0.6)*(0.3 + 0.7*Math.sqrt(k))); s.material.opacity = 0.85*(1 - k);
   }
 }
 
@@ -3015,7 +3018,7 @@ function spawnInkBurst(pos, big){
 }
 function updateInk(dt){
   for(const s of [...inkSparkPool.active]){ s.userData.t += dt; const k = s.userData.t/0.2; if(k >= 1){ inkSparkPool.release(s); continue; }
-    s.scale.setScalar((s.userData.big ? 2.6 : 1.4)*(0.35 + 0.65*Math.sqrt(k))); s.material.opacity = 0.9*(1 - k); }
+    s.scale.setScalar((s.userData.big ? 1.7 : 0.85)*(0.35 + 0.65*Math.sqrt(k))); s.material.opacity = 0.8*(1 - k); }
   for(const s of [...actionPool.active]){ s.userData.t += dt; const k = s.userData.t/0.24; if(k >= 1){ actionPool.release(s); continue; }
     s.scale.setScalar(1.2 + 2.8*Math.sqrt(k)); s.material.opacity = 0.8*(1 - k*k); }
 }
@@ -3079,7 +3082,7 @@ const sfxPool = new ObjectPool(
   (d) => { d.hidden = true; }, 10);
 let lastSfx = 0;
 function spawnSfx(pos, text, tone = 'ink'){
-  const now = performance.now(); if(now - lastSfx < 90) return; lastSfx = now;
+  const now = performance.now(); if(now - lastSfx < 320) return; lastSfx = now;   // weniger Schriftzeichen gleichzeitig
   const d = sfxPool.acquire(); d.textContent = text; d.dataset.tone = tone;
   d._w.set(pos.x, pos.y + 0.5, pos.z); d._t = 0; d._rot = (Math.random() - 0.5)*24; d.hidden = false;
 }
@@ -11873,7 +11876,7 @@ function spkSprite(kind){ if(!SPK.tex[kind]) SPK.tex[kind] = avSparkTex(kind);
   s.visible = true; return s; }
 function hitSpark(pos, color = '#ffffff', size = 1, dir){
   const col = new THREE.Color(color);
-  const a = spkSprite('star'); if(a){ a.position.copy(pos); a.material.color.copy(col).lerp(_avc.set('#ffffff'), 0.35); a.material.rotation = Math.random()*6.28; SPK.live.push({s:a, t:0, life:0.07 + size*0.04, s0:0.25*size, s1:1.1*size, a0:1}); }
+  const a = spkSprite('star'); if(a){ a.position.copy(pos); a.material.color.copy(col).lerp(_avc.set('#ffffff'), 0.35); a.material.rotation = Math.random()*6.28; SPK.live.push({s:a, t:0, life:0.07 + size*0.04, s0:0.2*size, s1:0.75*size, a0:0.85}); }
   const n = size > 1.2 ? 3 : 2;
   for(let i = 0; i < n; i++){ const b = spkSprite('streak'); if(!b) break; b.position.copy(pos); b.material.color.copy(col);
     let ang = Math.random()*6.28; if(dir && i === 0){ _avp.copy(pos).project(camera); _avq.copy(pos).add(dir).project(camera); ang = Math.atan2(_avq.y - _avp.y, (_avq.x - _avp.x)*camera.aspect); }
@@ -16263,7 +16266,8 @@ function ssDuelCamera(dt){
     ssCamDir.yaw += bd*(1 - Math.exp(-dt*(solo ? 1.4 : 0.9)));
   }
   cam.yaw = lerp(cam.yaw, ssCamDir.yaw, 1 - Math.exp(-dt*0.8)); cam.pitch = lerp(cam.pitch, vt ? 0.4 : 0.5, 1 - Math.exp(-dt*2));
-  if(vt){ VT.fitPts = solo ? [solo.core.p] : P ? [P[0].core.p, P[1].core.p] : null; updateCamera(dt, focus, solo ? 6.4 : clamp(5.6 + sep*0.35, 6.2, 9)); VT.fitPts = null; }
+  if(vt){ const foc = solo ? [solo] : P ? [P[0], P[1]] : []; for(const [rr, el] of overheads) el.classList.toggle('vtf', foc.includes(rr));
+    VT.fitPts = solo ? [solo.core.p] : P ? [P[0].core.p, P[1].core.p] : null; updateCamera(dt, focus, solo ? 6.4 : clamp(5.6 + sep*0.35, 6.2, 9)); VT.fitPts = null; }
   else updateCamera(dt, focus, clamp(8 + sep*0.5 + spread*0.25, 8.5, 15));
   return true;
 }
@@ -23349,6 +23353,7 @@ try{
 const vtCss = document.createElement('style');
 vtCss.textContent = `html.vt{background:#000;}
 html.vt #av-lb i{max-height:4.5vh;}
+html.vt .ovh{gap:1px;} html.vt .ovh .nm{display:none;} html.vt .ovh.vtf .nm{display:block;font-size:9px;letter-spacing:.03em;} html.vt .ovh .hp{width:36px;height:5px;border-width:1.5px;} html.vt .ovh .gd, html.vt .ovh .ai{display:none !important;} html.vt .dmg{font-size:14px;-webkit-text-stroke:1px var(--ink);} html.vt .sfx{font-size:18px;-webkit-text-stroke:1.5px var(--ink);text-shadow:2px 2px 0 var(--ink);}
 html.vt-clean body.ss-view #ss-top, html.vt-clean #cm-restart, html.vt-clean .ssc-skip{display:none !important;} html.vt-clean #opt-btn{opacity:.12;} html.vt-clean #opt-btn:hover{opacity:1;}
 html.vt #teams{gap:5px;top:10px;max-width:calc(var(--vtw) - 12px);flex-wrap:wrap;justify-content:center;row-gap:4px;} html.vt #teams > *{min-width:0;flex-shrink:1;} html.vt #teams .tn{font-size:12px;padding:2px 5px;border-width:2px;box-shadow:2px 2px 0 var(--ink);} html.vt #teams .pip{width:18px;} html.vt #teams .clk{padding:2px 6px;} html.vt #teams .clk b{font-size:13px;}
 html.vt body{position:fixed;left:var(--vtx);top:var(--vty);width:var(--vtw);height:var(--vth);margin:0;transform:translateZ(0);overflow:hidden;contain:paint;box-shadow:0 0 0 1px #222;}
@@ -23622,6 +23627,264 @@ setInterval(() => {
   const hint = P.querySelector('.hint'); if(hint) hint.insertAdjacentHTML('beforeend', ' “Scene music” gives every tournament scene its own soundtrack (lobby, opening, intermission, face-off, overtime, victory, aftermath, steal, farewell, ceremony, gacha). “Song” picks the fight music.');
 })();
 try{ Object.assign(window.__arena, {MUS, muMood, MU_SCENE_TRACKS, muNow:() => MU.tr && MU.tr.id, battle, liveRagdolls:() => ragdolls}); }catch(e){}
+
+/* ============================ physics/ Haltung, Selbst-Aufrichten, perfekte Landung, Aircombo-KI (v66) ============================ */
+// 1) Haltung: Becken und Oberkörper dürfen im aktiven Zustand nicht mehr nach vorne/hinten durchhängen. Über eine erlaubte Neigung
+//    hinaus richtet ein zusätzlicher Servo sie auf (bei Angriffen darf etwas mehr Neigung sein).
+// 2) Selbst-Aufrichten: kippt eine Figur durch eigene Moves/Rollen, fängt sie sich (selfRightT) statt umzufallen.
+// 3) Perfekte Landung: Schnelle Kämpfer (SPD) können sich nach einem Wurf in die Luft fangen und auf den Füßen landen.
+// 4) Aircombo-KI: Uppercut → hinterherspringen ist wieder Teil der Stat-/Balance-KI und wird gern genutzt.
+const PO = {up:new THREE.Vector3(), ax:new THREE.Vector3(), w:new THREE.Vector3(), pel:0.2, tor:0.26, K:13};
+function poUpright(part, maxTilt, K, cap){
+  PO.up.set(0, 1, 0).applyQuaternion(part.q);
+  const c = clamp(PO.up.y, -1, 1), ang = Math.acos(c); if(ang <= maxTilt) return;
+  PO.ax.crossVectors(PO.up, UP); const L = PO.ax.length(); if(L < 1e-5) PO.ax.set(1, 0, 0); else PO.ax.multiplyScalar(1/L);
+  const av = part.body.angvel(); PO.w.set(av.x, av.y, av.z);
+  const want = Math.min(cap, (ang - maxTilt)*K), cur = PO.w.dot(PO.ax);
+  if(cur < want) PO.w.addScaledVector(PO.ax, want - cur);
+  part.body.setAngvel(vObj(PO.w), true);
+}
+const _poControl = Ragdoll.prototype.control;
+Ragdoll.prototype.control = function(dt){
+  _poControl.call(this, dt);
+  if(this.ko || this.hidden || this.proxy) return;
+  const st = this.state, fix = (this.selfRightT || 0) > 0 || (this.plLandT || 0) > 0;
+  if(fix){
+    poUpright(this.parts.pelvis, 0.05, 14, 9); poUpright(this.parts.torso, 0.08, 14, 9);
+    // leichtes Abbremsen von Überschlägen
+    for(const p of [this.parts.pelvis, this.parts.torso]){ const av = p.body.angvel(); p.body.setAngvel({x:av.x*0.9, y:av.y, z:av.z*0.9}, true); }
+    return;
+  }
+  if(this.ssPose || (this.scriptT || 0) > 0 || this.muscle < 0.5) return;
+  if(st !== STATES.NORMAL && st !== STATES.LIGHT_STUN) return;
+  const atk = !!this.attack, air = typeof airActive === 'function' && airActive(this);
+  const k = this.muscle*(atk ? 0.7 : 1);
+  poUpright(this.parts.pelvis, atk || air ? 0.5 : PO.pel, PO.K*k, 8);
+  poUpright(this.parts.torso, atk || air ? 0.62 : PO.tor, PO.K*1.15*k, 9);
+};
+const _poUpdState = Ragdoll.prototype.updateState;
+Ragdoll.prototype.updateState = function(dt){
+  _poUpdState.call(this, dt);
+  if(this.selfRightT > 0) this.selfRightT -= dt;
+  if(this.plLandT > 0) this.plLandT -= dt;
+  // Perfekte Landung: einmal pro Wurf würfeln, kurz vor dem Boden im Fallen
+  if(this.state !== STATES.RAGDOLL){ this.plTried = false; this.plGo = false; return; }
+  if(this.ko || !this.stat || this.cs.airHeldBy){ this.plGo = false; return; }
+  if(this.plGo){   // gewürfelt und geschafft: im Fallen kurz vor dem Boden abfangen
+    if(this.grounded || (this.cvel.y < -0.3 && (this.height ?? 9) < 2.6)){ this.plGo = false; plLand(this); }
+    return;
+  }
+  // einmal pro Wurf würfeln – nur wenn die Figur wirklich hoch geschleudert wurde
+  if(this.plTried || this.stateTime < 0.12 || (this.launchT || 0) <= 0 || this.grounded || (this.height ?? 0) < 1.9) return;
+  const spd = this.stat.spd ?? 50; this.plTried = true; if(spd < 68) return;
+  if(Math.random() < clamp((spd - 68)/32, 0, 1)*0.6) this.plGo = true;
+};
+function plLand(r){
+  r.setState(STATES.NORMAL); r.muscle = Math.max(r.muscle, 0.85); r.fallen = -0.7; r.launchT = 0; r.still = 0;
+  r.plLandT = 0.5; r.iframes = Math.max(r.iframes || 0, 0.25);
+  r.addVelocity({x:-r.cvel.x*0.55, y:Math.max(0, -r.cvel.y*0.35), z:-r.cvel.z*0.55});
+  for(const p of r.partList){ const av = p.body.angvel(); p.body.setAngvel({x:av.x*0.2, y:av.y*0.4, z:av.z*0.2}, true); }
+  r.plFx = true; r.plCount = (r.plCount || 0) + 1;
+  if(typeof stGhost === 'function') stGhost(r, '#e8f6ff');
+  sfx('whoosh_up', {pos:r.core.p, gain:0.55});
+  bus.emit('log', `${r.name} lands perfectly`); bus.emit('combat:perfectLanding', {r});
+  // Aufsetzen: kleiner Staubring
+  after(0.18, () => { if(!ragdolls.includes(r)) return; spawnDust(r.core.p.x, r.core.p.z, 1); spawnShock(r.core.p.x, r.core.p.z, 1.1, '#e8f6ff'); });
+}
+// Aircombo-KI: Uppercut einleiten und nach dem Treffer hinterherspringen (gilt für alle KI-Varianten)
+const _poChoose = Brain.prototype.chooseSkill;
+Brain.prototype.chooseSkill = function(T, d){
+  const r = this.r;
+  if(T && !T.ko && !(T.kit && T.kit.boss) && r.kit){
+    const ag = (this.A && this.A.aggression) || 1, q = r.stat ? (r.stat.iq - 60)/40 : 0;
+    // Follow-up: Fenster nach dem Uppercut – fast immer nutzen, wenn genug CE da ist
+    if(r.cs.airWin && r.cs.airWin.until > r.time && r.cs.airWin.T === T && r.ce >= AIR_COST + 3 && Math.random() < 0.75 + q*0.1 && startAirCombo(r)){ this.setIntent('COMBO'); this.comboGoal = 5; return true; }
+    // Starter: Uppercut aus kurzer Distanz, besonders nach Kombo-Ende oder gegen betäubte Gegner
+    if(!airActive(r) && d < 1.9 && r.grounded && (r.cs.upCd || 0) < r.time && r.ce >= AIR_COST + 3 && (T.state === STATES.NORMAL || T.state === STATES.LIGHT_STUN || T.state === STATES.HEAVY_STUN)){
+      const c = (this.comboEndT > 0 || (r.cs.followUp || 0) > 0) ? 0.22 : 0, stun = T.state !== STATES.NORMAL ? 0.12 : 0;
+      if(Math.random() < 0.08*ag + c + stun && r.uppercut()){ this.setIntent('HEAVY'); return true; }
+    }
+  }
+  return _poChoose.call(this, T, d);
+};
+try{ Object.assign(window.__arena, {onLog:(fn) => bus.on('log', fn), poSample:() => ragdolls.filter(r => !r.ko && r.state === STATES.NORMAL && !r.attack && !r.ssPose).map(r => { const u = new THREE.Vector3(0, 1, 0).applyQuaternion(r.parts.torso.q); return Math.acos(clamp(u.y, -1, 1)); })}); }catch(e){}
+try{ Object.assign(window.__arena, {plLand, poStats:() => ({land:ragdolls.reduce((s, r) => s + (r.plCount || 0), 0)})}); }catch(e){}
+
+/* ============================ combat/ Unterzahl: gestaffelte Angriffe + Kampfinstinkt (v66) ============================ */
+// Wer in Unterzahl kämpft, wird nicht mehr einfach im Sandwich zerdrückt – ohne Ankündigung:
+//  · Gestaffelt: Die Überzahl greift abwechselnd an (ein „Token“ pro Ziel). Wer gerade nicht dran ist, hält Abstand, umkreist, lauert.
+//  · Kampfinstinkt: Sind mehrere Gegner nah, weicht der Kämpfer öfter aus (manchmal mit sofortigem Konter) und seine Schläge
+//    streifen gelegentlich einen zweiten Gegner.
+// Stärke U ∈ [0..1]: zu ~75 % aus den Stats (INT, RES, SPD vor STR, CE) und zu ~25 % aus der Persönlichkeit (Ego).
+// Sichtbar nur als dezente, für jeden Kämpfer etwas andere Aura bzw. Atemwolken – keine Banner, keine Sprechblasen.
+const UG = {on:true, tune:{hold:0.85, holdU:0.25, focus:0.55, focusU:0.4, evade:0.32, evadeU:0.3, counter:0.55, cleave:0.36, brk:0.4, brkU:0.3, brkCd:5, stun:0.35}, stats:{evade:0, counter:0, cleave:0, hold:0}};
+const UG_EGO = {wild:1, instinct:0.95, egoist:0.9, stoic:0.85, analyst:0.8, playmaker:0.65};
+function ugFighting(){ return ctx.mode === 'battle' && battle.phase === 'fight'; }
+function ugTeamN(team){ let n = 0; for(const o of ragdolls) if(o.team === team && !o.ko && !(o.kit && o.kit.summon) && !o.cs.minionOf && !o.hidden) n++; return n; }
+// Unterzahl-Faktor: 0 = keine Unterzahl, 1 = mindestens doppelt so viele Gegner
+function ugOut(r){
+  if(!UG.on || !ugFighting() || r.ko || (r.team !== 'red' && r.team !== 'blue')) return 0;
+  const me = ugTeamN(r.team), them = ugTeamN(r.team === 'red' ? 'blue' : 'red'); if(me <= 0 || them <= me) return 0;
+  return clamp((them/me - 1)/1, 0.5, 1);
+}
+function ugPower(r){
+  if(r.ugU !== undefined && r.ugUT === r.stat) return r.ugU;
+  const s = r.stat || {}, g = (k) => (s[k] ?? 60)/100;
+  const st = clamp((g('iq')*0.32 + g('res')*0.26 + g('spd')*0.22 + g('str')*0.1 + g('ce')*0.1 - 0.3)/0.6, 0, 1);
+  let eg = 0.8; try{ if(r.ssId != null && typeof ssP === 'function' && SS.st){ const f = ssP(r.ssId); if(f && UG_EGO[f.ego] !== undefined) eg = UG_EGO[f.ego]; } }catch(e){}
+  r.ugUT = r.stat; return (r.ugU = clamp(0.25 + st*0.55 + eg*0.25 - 0.1, 0.2, 1));
+}
+const ugTargets = (o) => (o.brain && o.brain.target) || o.ssTarget;
+// ---- Gestaffelte Angriffe: Token pro bedrängtem Kämpfer ----
+let ugPlanT = 0;
+function ugPlan(dt){
+  ugPlanT -= dt; if(ugPlanT > 0) return; ugPlanT = 0.15;
+  for(const o of ragdolls) o.ugHoldOn = null;
+  if(!ugFighting()) return;
+  for(const X of ragdolls){
+    const out = ugOut(X); if(!out) { X.ugTok = null; continue; }
+    const att = ragdolls.filter(o => !o.ko && o.team !== X.team && (o.team === 'red' || o.team === 'blue') && ugTargets(o) === X && hdist(o.core.p, X.core.p) < 16);
+    if(att.length < 2){ X.ugTok = null; continue; }
+    let T = X.ugTok; const now = X.time;
+    if(!T || !att.includes(T.r) || T.until < now || T.r.ko){
+      // Token weitergeben: wer am längsten gewartet hat (bzw. am nächsten ist) ist dran
+      // Wer dran ist: meist der Gegner, den der Bedrängte gerade selbst fokussiert (je klüger/stärker, desto eher) – sonst wer am längsten wartet
+      const U = ugPower(X), foc = ugTargets(X), p = clamp((UG.tune.hold + UG.tune.holdU*U)*out, 0, 0.97);
+      let next = foc && att.includes(foc) && Math.random() < UG.tune.focus + UG.tune.focusU*U ? foc : null;
+      if(!next) next = att.filter(o => !T || o !== T.r).sort((a, b) => (a.ugWaitSince ?? now) - (b.ugWaitSince ?? now) || hdist(a.core.p, X.core.p) - hdist(b.core.p, X.core.p))[0] || att[0];
+      T = X.ugTok = {r:next, until:now + 1.6 + Math.random()*1.4, strict:Math.random() < p};
+      next.ugWaitSince = null;
+    }
+    if(!T.strict) continue;
+    for(const o of att){ if(o === T.r) continue; o.ugHoldOn = X; if(o.ugWaitSince == null) o.ugWaitSince = now; }
+  }
+}
+// Fokus des Bedrängten: bleibt an einem Gegner dran (Kluge wählen den Angeschlagensten), statt den Schaden zu verteilen
+function ugFocus(r){
+  const out = ugOut(r);
+  if(!out){ if(r.ugFocus){ if(r.brain && r.brain.focus === r.ugFocus) r.brain.focus = null; r.ugFocus = null; } return; }
+  const foes = ragdolls.filter(o => !o.ko && o.team !== r.team && (o.team === 'red' || o.team === 'blue') && !o.hidden); if(!foes.length) return;
+  let F = r.ugFocus && foes.includes(r.ugFocus) ? r.ugFocus : null;
+  if(F && hdist(F.core.p, r.core.p) > 10 && foes.some(o => o !== F && hdist(o.core.p, r.core.p) < 2.5)) F = null;
+  if(!F){ const U = ugPower(r);
+    F = Math.random() < 0.35 + U*0.6 ? foes.slice().sort((a, b) => a.hp/a.maxHp - b.hp/b.maxHp || hdist(a.core.p, r.core.p) - hdist(b.core.p, r.core.p))[0]
+      : foes.slice().sort((a, b) => hdist(a.core.p, r.core.p) - hdist(b.core.p, r.core.p))[0]; }
+  r.ugFocus = F; if(r.brain) r.brain.focus = F; if(r.ssId != null) r.ssTarget = F;
+}
+const _ugBrainUpd = Brain.prototype.update;
+Brain.prototype.update = function(dt){
+  const r = this.r; try{ ugFocus(r); }catch(e){} _ugBrainUpd.call(this, dt);
+  const X = r.ugHoldOn; if(!X || r.ko || !ragdolls.includes(X) || X.ko || r.state !== STATES.NORMAL || r.isPlayer) return;
+  // Wer nicht dran ist: Abstand halten (≈3 m), seitlich umkreisen, nicht hineinlaufen
+  const dx = r.core.p.x - X.core.p.x, dz = r.core.p.z - X.core.p.z, d = Math.hypot(dx, dz) || 1, ux = dx/d, uz = dz/d;
+  const side = (r.ugSide ??= Math.random() < 0.5 ? -1 : 1), want = 3 + (r.ugOff ??= Math.random()*0.8);
+  const radial = clamp((want - d)*0.9, -0.6, 1);
+  r.moveInput.set(ux*radial - uz*side*0.55, uz*radial + ux*side*0.55); r.sprint = false;
+  r.lookYaw = Math.atan2(-ux, -uz); UG.stats.hold += dt;
+};
+const _ugStartAttack = Ragdoll.prototype.startAttack;
+Ragdoll.prototype.startAttack = function(id, ...rest){
+  if(this.ugHoldOn && !this.isPlayer){ const def = ATTACKS[id]; if(def && (def.melee || !def.projectile) && hdist(this.core.p, this.ugHoldOn.core.p) < 3.6) return; }
+  return _ugStartAttack.call(this, id, ...rest);
+};
+const _ugCast = Ragdoll.prototype.cast;
+Ragdoll.prototype.cast = function(id, ...rest){
+  if(this.ugHoldOn && !this.isPlayer && Math.random() < 0.8) return false;   // Lauernde setzen Techniken sparsamer ein
+  return _ugCast.call(this, id, ...rest);
+};
+// ---- Kampfinstinkt: Ausweichen/Konter und Streifschläge ----
+const _ugResolve = resolveHit;
+resolveHit = function(att, tgt, def, part, dir){
+  if(att && tgt && att !== tgt && att.team !== tgt.team && def && !def.unblockable && !tgt.isPlayer){
+    const out = ugOut(tgt);
+    if(out && (tgt.iframes || 0) <= 0 && !(def.cost >= 100) && !tgt.ko){
+      let near = 0; for(const o of ragdolls) if(!o.ko && o.team !== tgt.team && (o.team === 'red' || o.team === 'blue') && hdist(o.core.p, tgt.core.p) < 5) near++;
+      const U = ugPower(tgt), st = tgt.state;
+      if(near >= 2 && (st === STATES.NORMAL || st === STATES.LIGHT_STUN)){
+        const ch = (UG.tune.evade + UG.tune.evadeU*U)*out*(def.melee ? 1 : def.projectile ? 0.55 : 0.3)*(st === STATES.LIGHT_STUN ? 0.6 : 1)*(tgt.attack ? 0.5 : 1);
+        if(Math.random() < ch){ if(st !== STATES.NORMAL) tgt.setState(STATES.NORMAL); ugEvade(tgt, att, def); return; }
+      }
+      // Kombo-Ausbruch: wer in Unterzahl in einer Kombo festhängt, reißt sich manchmal heraus
+      if(st === STATES.HEAVY_STUN || st === STATES.RAGDOLL || st === STATES.LIGHT_STUN){
+        const now = tgt.time; tgt.ugCh = (tgt.ugCh || []).filter(t => now - t < 2); tgt.ugCh.push(now);
+        if(tgt.ugCh.length >= 3 && (tgt.ugBreakCd || 0) < now && Math.random() < (UG.tune.brk + UG.tune.brkU*U)*out){
+          tgt.ugBreakCd = now + UG.tune.brkCd - U*2; tgt.ugCh = []; tgt.burstCd = 0;
+          if(typeof tgt.burst === 'function' && tgt.burst()){ UG.stats.brk = (UG.stats.brk || 0) + 1; return; }
+        }
+      }
+    }
+  }
+  const hp0 = tgt ? tgt.hp : 0, res = _ugResolve(att, tgt, def, part, dir);
+  if(UG.dbg && att && tgt && att.team !== tgt.team){ const dd = Math.max(0, hp0 - tgt.hp), S = UG.stats; if(ugOut(tgt)){ const k = tgt.ugTok && tgt.ugTok.r === att ? 'inHolder' : att.ugHoldOn === tgt ? 'inWaiting' : 'inOther'; S[k] = (S[k] || 0) + dd; S[k + 'N'] = (S[k + 'N'] || 0) + 1; S[(def.melee ? 'm' : def.projectile ? 'p' : 'o') + 'In'] = (S[(def.melee ? 'm' : def.projectile ? 'p' : 'o') + 'In'] || 0) + 1; S.stAtk = (S.stAtk || 0) + (tgt.attack ? 1 : 0); S.stN = (S.stN || 0) + (tgt.state === STATES.NORMAL ? 1 : 0); } else if(ugOut(att)) S.out = (S.out || 0) + dd; }
+  // Streifschlag: Nahkampftreffer des Bedrängten erwischt manchmal einen zweiten Gegner
+  if(att && tgt && !att.ugCleaving && def && def.melee && !att.isPlayer && att.team !== tgt.team){
+    const out = ugOut(att);
+    if(out && Math.random() < UG.tune.cleave*ugPower(att)*out){
+      const o2 = ragdolls.find(o => o !== tgt && !o.ko && o.team === tgt.team && hdist(o.core.p, tgt.core.p) < 1.9 && hdist(o.core.p, att.core.p) < 2.8);
+      if(o2){ att.ugCleaving = true; try{ _ugResolve(att, o2, Object.assign({}, def, {dmg:(def.dmg || 0)*0.55, onHit:null, multi:null}), o2.parts.torso, dir); UG.stats.cleave++; }catch(e){} att.ugCleaving = false; }
+    }
+  }
+  return res;
+};
+function ugEvade(r, att, def){
+  UG.stats.evade++;
+  r.iframes = Math.max(r.iframes || 0, 0.32);
+  const dx = r.core.p.x - att.core.p.x, dz = r.core.p.z - att.core.p.z, d = Math.hypot(dx, dz) || 1, s = Math.random() < 0.5 ? -1 : 1;
+  r.addVelocity({x:(-dz/d*s*0.8 + dx/d*0.4)*6, y:0.6, z:(dx/d*s*0.8 + dz/d*0.4)*6});
+  if(typeof stGhost === 'function') stGhost(r, ugLook(r).col);
+  sfx('whoosh', {pos:r.core.p, gain:0.45});
+  bus.emit('combat:evade', {r, att});
+  // Sofortiger Konter (nur Nahkampf, Angreifer in Reichweite)
+  if(def.melee && Math.random() < UG.tune.counter*ugPower(r)){
+    after(0.14, () => { if(!ragdolls.includes(r) || r.ko || !r.canAct() || att.ko) return; r.yaw = Math.atan2(att.core.p.x - r.core.p.x, att.core.p.z - r.core.p.z); if(hdist(att.core.p, r.core.p) < 2.4){ UG.stats.counter++; r.m1(); } });
+  }
+}
+// Instinkt: kürzere Betäubung (schneller wieder handlungsfähig)
+const _ugSetState = Ragdoll.prototype.setState;
+Ragdoll.prototype.setState = function(s, dur){
+  _ugSetState.call(this, s, dur);
+  if((s === STATES.LIGHT_STUN || s === STATES.HEAVY_STUN) && this.state === s && !this.isPlayer){ const out = ugOut(this); if(out) this.stunDur *= 1 - UG.tune.stun*(0.5 + 0.5*ugPower(this))*out; }
+};
+// ---- Dezente, individuelle Optik ----
+const UG_STYLES = ['embers', 'mist', 'flicker', 'ripple', 'motes'];
+function ugHash(s){ let h = 2166136261; for(let i = 0; i < s.length; i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+function ugLook(r){
+  if(r.ugLook) return r.ugLook;
+  const h = ugHash(String(r.ssId ?? '') + '|' + (r.name || '')), hue = (h % 360)/360, base = r.kit && r.kit.look && r.kit.look.accent;
+  const c = new THREE.Color(); if(base && (h >>> 9) % 3) c.set(base).offsetHSL(((h >>> 12) % 40 - 20)/360, -0.15, 0.08); else c.setHSL(hue, 0.55, 0.68);
+  return (r.ugLook = {col:'#' + c.getHexString(), style:UG_STYLES[(h >>> 4) % UG_STYLES.length], rate:0.75 + ((h >>> 16) % 50)/100, breath:0.9 + ((h >>> 20) % 60)/100});
+}
+function ugFx(dt){
+  if(!ugFighting()) return;
+  for(const r of ragdolls){
+    const out = ugOut(r); if(!out || r.hidden || r.proxy){ r.ugBr = 0; continue; }
+    const L = ugLook(r), P = r.parts, t = P.torso.p, ft = r.core.p, k = 0.55 + 0.45*out;
+    // Atem: kleine Wolke vor dem Mund in individuellem Rhythmus
+    r.ugBr = (r.ugBr || 0) + dt; if(r.ugBr > L.breath){ r.ugBr = 0; const hp = P.head.p, f = facingVec(r);
+      emitParticles(hp.x + f.x*0.22, hp.y - 0.06, hp.z + f.z*0.22, 3, {speed:0.35, up:0.15, color:'#eef4ff', size:0.11, life:0.7, gravity:-0.3, drag:2.5, dir:{x:f.x*0.5, y:0.05, z:f.z*0.5}, spread:0.35}); }
+    if(Math.random() > dt*6*L.rate*k) continue;
+    switch(L.style){
+      case 'embers': emitParticles(t.x + (Math.random() - 0.5)*0.5, t.y - 0.3, t.z + (Math.random() - 0.5)*0.5, 1, {speed:0.3, up:1.2, color:L.col, size:0.09, life:0.8, gravity:-1.2, drag:1}); break;
+      case 'mist': emitParticles(ft.x + (Math.random() - 0.5)*0.9, ft.y - r.standH + 0.08, ft.z + (Math.random() - 0.5)*0.9, 1, {speed:0.25, up:0.1, color:L.col, size:0.22, life:1.0, gravity:0, drag:2, flat:true}); break;
+      case 'flicker': { const a = Math.random()*6.28; emitParticles(t.x + Math.cos(a)*0.38, t.y + (Math.random() - 0.4)*0.8, t.z + Math.sin(a)*0.38, 1, {speed:0.05, up:0.9, color:L.col, size:0.06, life:0.35, gravity:-2, drag:3}); break; }
+      case 'ripple': { const a = Math.random()*6.28; emitParticles(ft.x + Math.cos(a)*0.55, ft.y - r.standH + 0.05, ft.z + Math.sin(a)*0.55, 1, {speed:0.6, up:0, color:L.col, size:0.08, life:0.45, gravity:0, drag:1.5, flat:true, dir:{x:Math.cos(a), y:0, z:Math.sin(a)}, spread:0.2}); break; }
+      default: { const a = r.time*1.7 + Math.random()*0.4; emitParticles(t.x + Math.cos(a)*0.5, t.y + Math.sin(a*1.3)*0.25, t.z + Math.sin(a)*0.5, 1, {speed:0.1, up:0.1, color:L.col, size:0.08, life:0.6, gravity:0, drag:2}); }
+    }
+  }
+}
+const _ugPhys = physicsStep;
+physicsStep = function(){ _ugPhys(); try{ ugPlan(DT); }catch(e){ console.warn('UG', e); } };
+setInterval(() => { if(!document.hidden) try{ ugFx(0.05); }catch(e){} }, 50);
+// Test-/Abstimmungshilfe
+function ugSim(ch, nA = 1, nB = 2, maxSteps = 60*240){
+  ctx.timeScale = 1; startBattle(Math.max(nA, nB)); ctx.mode = 'battle';
+  const reds = ragdolls.filter(r => r.team === 'red'), blues = ragdolls.filter(r => r.team === 'blue');
+  for(const r of reds.slice(nA)) removeRagdoll(r); for(const r of blues.slice(nB)) removeRagdoll(r);
+  battle.phase = 'fight'; battle.clock = 0;
+  let n = 0; while(battle.phase === 'fight' && n < maxSteps){ physicsStep(); n++; }
+  return {winner:battle.winner, t:+battle.clock.toFixed(1), steps:n};
+}
+try{ Object.assign(window.__arena, {ugFx, stepOnce:() => physicsStep(), UG, ugOut, ugPower, ugSim, ugLook, setTeams:(red, blue) => { ctx.teams.red = red; ctx.teams.blue = blue; }, ctxRef:() => ctx, CHAR_IDS:() => CHAR_ORDER.slice()}); }catch(e){}
 requestAnimationFrame(frame);
 } // startGame
 </script>

@@ -100,3 +100,17 @@ Which building blocks each technique uses was measured automatically (`VAR_USE`)
 - **Fights always go to the end.** The old 150 s limit, which decided by remaining HP, is gone. From 150 s an **OVERTIME** begins: damage rises steadily (+2.5 % per second), and from 210 s the arena drains every fighter equally. A fight therefore always ends by K.O.
 - **Better targeting:** fighters no longer ignore an opponent who is hitting them. Taking a hit, or an opponent attacking at close range while your own target is far away, lifts the duel lock right away. Retaliation, threats at close range and opponents nobody is covering get a bonus for every ego. Outside the tournament, the AI also prefers whoever just hit it.
 - **Every scene has its own soundtrack** (11 new procedural tracks): Selection Room (lobby), Blue Prison Anthem (tournament intro), Training Grounds (intermission), Face-Off (match intro/lineup), Sudden Death (overtime), Victory Lap (end of a fight), Aftermath (results), Chains (steal/chains/verdict), Farewell (farewells/cut), Crowned (ceremony), Soul Summon (gacha). Fights keep the 6 fight tracks, or the song chosen under Options. Transitions crossfade, and short scenes in the middle of a fight keep the fight music. Options → “Scene music” switches it off.
+
+## Posture, perfect landing, air combos, outnumbered fights, less clutter (v66)
+
+- **No more falling over from your own actions:** if a fighter tips over without having been hit (own move, roll, dash), they catch themselves instead of going ragdoll. Landing from your own jump moves causes no fall damage.
+- **Posture:** an extra servo keeps the pelvis and upper body upright as long as a fighter is not ragdolled. Attacks may lean a bit further. In simulations the share of strongly tilted upper bodies (> 0.4 rad, about 23°) dropped from ~50 % to ~10 %.
+- **Air combos are back:** the stat and balancing AI had dropped the uppercut and air-follow-up logic. Fighters now use uppercuts again and almost always jump after the target when they have the CE (≈ 3 air combos per fight).
+- **Perfect landing:** fighters with high SPD (from 68, up to 60 % at 100) can catch themselves after a launch and land on their feet, with an afterimage and a dust ring.
+- **Outnumbered (e.g. 1v2):** nothing is announced, but the outnumbered fighter keeps a chance.
+  - The bigger team attacks in turns, mostly the opponent the outnumbered fighter is focusing on, while the others keep their distance and lurk.
+  - The outnumbered fighter's combat instinct makes them dodge more often (sometimes with a counter), occasionally break out of combos, recover from stuns faster, and stay on one opponent. Their hits sometimes graze a second opponent.
+  - Strength comes about 75 % from stats (INT, RES, SPD before STR, CE) and 25 % from ego.
+  - In simulations a fighter of equal strength wins a 1v2 about 23 % of the time (previously 0 %).
+  - Visually there is only a subtle, individual aura (embers, mist, flicker, ripples or motes in a personal color) plus breath clouds in a personal rhythm.
+- **Less clutter:** hit stars are smaller and appear less often on small hits, and Japanese sound words appear at most every 0.32 s and smaller. In 9:16 mode, only the two fighters in the director's focus show their names, the health bars are narrow, and guard bars and AI labels are hidden.
