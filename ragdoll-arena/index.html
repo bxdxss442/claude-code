@@ -2187,6 +2187,7 @@ function attackVector(att, tgt, def, out){
 function applyDamage(t, dmg, kind, at){
   if(dmg <= 0) return false;
   dmg *= (t.dmgTaken || 1)*(t.buffs.guard ? 0.5 : 1);
+  if(battle.ot && battle.phase === 'fight') dmg = Math.round(dmg*(battle.otMul || 1));   // Verlängerung: Schaden steigt
   if(modeHooks.onDamage && t.lastHitBy) modeHooks.onDamage(t, t.lastHitBy, dmg);
   t.hp = Math.max((t.buffs.jackpot || t.buffs.undying) ? 1 : 0, t.hp - dmg); t.lastHurtT = t.time;
   t.ce += dmg*0.6;
@@ -3314,6 +3315,7 @@ class Brain{
       let sc = d + (isDown(o.state) ? 4 : 0) + (o.hp/o.maxHp)*2.2;
       if(o === this.target) sc -= 1.2;
       if(o.brain && o.brain.target === r) sc -= 0.8;
+      if(o === r.lastHitBy && r.time - (r.lastHitT ?? -99) < 2) sc -= 3.5;   // wer mich gerade trifft, wird nicht ignoriert
       if(sc < bs){ bs = sc; best = o; }
     }
     return best;
@@ -8858,7 +8860,7 @@ function startBattle(size){
   battle.syn = {red:applySynergies('red'), blue:applySynergies('blue')};
   for(const t of ['red', 'blue']) if(battle.syn[t].length) bus.emit('log', `${t === 'red' ? 'Red' : 'Blue'}: Synergies ${battle.syn[t].map(s => s.name).join(', ')}`);
   for(const r of ragdolls){ r.readState(); r.snapshot(); r.snapshot(); }
-  battle.phase = 'countdown'; battle.t = 0; battle.clock = 0; battle.winner = null; battle.slowT = 0;
+  battle.phase = 'countdown'; battle.t = 0; battle.clock = 0; battle.winner = null; battle.slowT = 0; battle.ot = false; battle.otMul = 1;
   cam.yaw = Math.PI/2; cam.pitch = 0.5;
   buildTeamHud(); setModeUi();
   bus.emit('log', `Auto-Battle ${size}v${size}: Red ${ctx.teams.red.map(c => CHARACTERS[c].name).join(', ')} vs. Blue ${ctx.teams.blue.map(c => CHARACTERS[c].name).join(', ')}`);
@@ -8877,8 +8879,11 @@ function updateBattle(dt){
     let w = null;
     if(red === 0 || blue === 0) w = red > blue ? 'red' : blue > red ? 'blue' : 'draw';
     else if(battle.clock > 150){
-      const hpOf = (t) => ragdolls.filter(r => r.team === t).reduce((s, r) => s + r.hp/r.maxHp, 0);
-      const hr = hpOf('red'), hb = hpOf('blue'); w = hr > hb ? 'red' : hb > hr ? 'blue' : 'draw';
+      // Kein Zeitlimit mehr: ab 150 s Verlängerung – Schaden steigt stetig, ab 210 s zehrt die Arena alle gleich aus. Der Kampf endet immer durch K.O.
+      if(!battle.ot){ battle.ot = true; showBanner('OVERTIME', 'gold'); bus.emit('log', 'Overtime – damage keeps rising until someone falls'); bus.emit('battle:overtime', {}); }
+      battle.otMul = 1 + (battle.clock - 150)/40;
+      if(battle.clock > 210){ const k = Math.min(0.02, 0.004 + (battle.clock - 210)*0.0002);
+        for(const r of ragdolls){ if(r.ko || r.hidden || !(r.team === 'red' || r.team === 'blue')) continue; r.hp -= r.maxHp*k*dt; if(r.hp <= 0){ r.hp = 0; r.ko = true; r.koT = 0; bus.emit('ko', {t:r, by:r.lastHitBy}); } } }
     }
     if(w) endBattle(w);
   } else if(battle.phase === 'over') battle.t += dt;
@@ -14861,7 +14866,7 @@ function ssStartFight(m){
   });
   battle.syn = {red:[], blue:[]};
   for(const r of ragdolls){ r.readState(); r.snapshot(); r.snapshot(); }
-  battle.phase = 'countdown'; battle.t = 0; battle.clock = 0; battle.winner = null; battle.slowT = 0;
+  battle.phase = 'countdown'; battle.t = 0; battle.clock = 0; battle.winner = null; battle.slowT = 0; battle.ot = false; battle.otMul = 1;
   cam.yaw = Math.PI/2; cam.pitch = 0.5;
   buildTeamHud(); setModeUi(); ssChemReset(m);
   ctx.timeScale = SS_PACE.time; bubbleLimit = 2; setModeHooks({frame:ssFrame, camera:ssCamera, onDamage:ssChemDamage});
@@ -16165,7 +16170,10 @@ function ssPlanDuels(dt){
     const foes = F.filter(o => o.team !== r.team); if(!foes.length){ r.ssTarget = null; continue; }
     const cur = r.ssTarget && !r.ssTarget.ko && foes.includes(r.ssTarget) ? r.ssTarget : null;
     r.ssRe = (r.ssRe ?? 0) - 0.25;
-    if(cur && r.ssRe > 0 && !isDown(cur.state)) continue;
+    // Bedrohung: wer mich gerade trifft oder direkt neben mir angreift, wird nicht ignoriert – das hebt die Ziel-Sperre auf
+    const hitBy = r.lastHitBy && r.lastHitBy !== cur && foes.includes(r.lastHitBy) && r.time - (r.lastHitT ?? -99) < 1.6 ? r.lastHitBy : null;
+    const lurk = foes.find(o => o !== cur && o.ssTarget === r && !isDown(o.state) && hdist(o.core.p, r.core.p) < 3.2 && (!cur || hdist(cur.core.p, r.core.p) > 6));
+    if(cur && r.ssRe > 0 && !isDown(cur.state) && !hitBy && !lurk) continue;
     const f = ssP(r.ssId), ego = f ? f.ego : 'stoic', E = SS_EGO_AI[ego] || SS_EGO_AI.stoic;
     const allies = F.filter(o => o.team === r.team && o !== r);
     let best = null, bs = -Infinity, why = null;
@@ -16179,6 +16187,10 @@ function ssPlanDuels(dt){
       else if(ego === 'wild'){ if(r.lastHitBy === T && r.time - (r.lastHurtT || -99) < 4){ sc += 30; reason = 'say'; } sc += 4; }
       else if(ego === 'stoic'){ if(T.ssTarget === r) sc += 14; }
       if(T === cur) sc += E.keep;
+      // Für alle Egos: Vergeltung gegen den aktuellen Angreifer, Nahbedrohungen, und kein Gegner bleibt völlig unbeachtet
+      if(T === hitBy) sc += 16 + E.keep*0.6;
+      if(T.ssTarget === r && d < 4) sc += 6;
+      if(!attackers(T) && foes.length > 1 && T !== cur) sc += 4;
       if(sc > bs){ bs = sc; best = T; why = reason; }
     }
     r.ssRe = E.every[0] + Math.random()*(E.every[1] - E.every[0]);
@@ -23425,6 +23437,191 @@ window.addEventListener('keydown', (e) => { if(e.target && /INPUT|TEXTAREA|SELEC
 try{ if(localStorage.getItem('ra_vertical') === '1') vtApply(true, true); if(localStorage.getItem('ra_clean') === '1') vtClean(true); }catch(e){}
 try{ Object.assign(window.__arena, {vtApply, vtState:() => ({on:VT.on, w:innerWidth, h:innerHeight, aspect:camera.aspect, fov:camera.fov, pfov:Math.atan(1/camera.projectionMatrix.elements[5])*360/Math.PI, cw:renderer.domElement.clientWidth, ch:renderer.domElement.clientHeight, rules:VT.rules.length, fit:VT.fit})}); }catch(e){}
 
+
+/* ============================ audio/ Szenen-Soundtrack: eigene Musik für jede Szenenart (v65) ============================ */
+// Ein Musik-Regisseur erkennt, was gerade läuft (Turnier-Lobby, Intro, Intermission, Match-Vorstellung, Kampf, Verlängerung,
+// Sieg, Ergebnis, Steal/Ketten, Abschied, Ehrung, Gacha) und blendet auf den passenden Track über. Kämpfe nutzen weiter die
+// 6 Kampf-Tracks (bzw. den im Optionsmenü gewählten). Szenen-Tracks laufen in Schleife, solange die Szene dauert.
+const MU_PIANO = (g = 0.05) => ({waves:[['triangle', 0], ['sine', 1200]], cut:2600, g, a:0.003, d:0.35, s:0.18, rel:0.35});
+const MU_BELL = (g = 0.03) => ({waves:[['sine', 0], ['sine', 2400], ['sine', 1902]], cut:7000, g, a:0.002, d:0.5, s:0.05, rel:0.8});
+const MU_PAD = (g = 0.025, cut = 1100) => ({waves:[['sawtooth', -9], ['sawtooth', 9]], cut, g, a:0.5, s:1, rel:0.6});
+const MU_SCENE_TRACKS = [
+  {id:'sc_lobby', mood:'lobby', name:'Selection Room', sub:'Lo-Fi · 84 BPM', bpm:84, root:50, scale:[0, 2, 3, 5, 7, 9, 10],
+    prog:{I:[0, 3, 0, 3], A:[0, 3, 5, 4, 0, 3, 5, 4], B:[5, 4, 0, 3, 5, 4, 2, 4]},
+    lead:['4 _ 3 _ 2 _ 0 _', '2 _ _ _ - - - -', '4 _ 5 _ 4 _ 2 _', '3 _ _ _ - - - -', '6 _ 5 _ 4 _ 3 _', '4 _ 2 _ - - - -', '2 _ 3 _ 4 _ 6 _', '4 _ _ _ - - - -'],
+    step(S){ const {t, N, ch, step, sec} = S, s16 = S.e/2;
+      if(sec !== 'I'){ if(hit('x......x..x.....', step)) MUI.kick(t, 0.5); if(hit('....x.......x...', step)) MUI.snare(t, 0.14); if(step % 2 === 0) MUI.hat(t, step % 4 ? 0.015 : 0.03); }
+      if(step === 0 || step === 10) for(const k of [0, 2, 4, 6]) muTone(t + k*0.012, N(ch + k, 0), S.e*(step === 0 ? 5 : 3), {waves:[['triangle', 0], ['sine', 1200]], cut:1500, g:0.02, a:0.01, d:0.5, s:0.4, rel:0.3});
+      if(step === 0 || step === 7) muTone(t, N(ch, -2), S.e*3, {w:'sine', cut:500, g:0.15, s:0.8});
+      if(sec === 'B') muLead(S, this.lead, (d, len) => muTone(t, N(d, 1), len*0.9, {w:'triangle', cut:2200, g:0.04, s:0.6, vib:9, rel:0.2}));
+    }},
+  {id:'sc_opening', mood:'opening', name:'Blue Prison Anthem', sub:'Opening · 160 BPM', bpm:160, root:52, scale:[0, 2, 3, 5, 7, 8, 10],
+    prog:{I:[0, 0, 5, 6], A:[0, 5, 3, 4, 0, 5, 3, 4], B:[5, 6, 0, 0, 5, 6, 4, 4]},
+    lead:['0 _ 2 _ 3 _ 4 _', '7 _ _ 6 _ 4 _ _', '3 _ 4 _ 3 _ 2 _', '0 _ _ _ - - 4 5', '7 _ 7 _ 8 _ 7 _', '9 _ _ 8 _ 7 _ _', '6 _ 7 _ 8 _ 9 _', '7 _ _ _ _ _ _ _'],
+    step(S){ const {t, N, ch, step, sec} = S, s16 = S.e/2;
+      if(sec === 'I'){ if(hit('x.....x.x.......', step)) MUI.taiko(t, 0.7); if(S.sbar === 3 && step >= 8 && step % 2 === 0) MUI.snare(t, 0.12 + (step - 8)*0.03); }
+      else { if(hit(sec === 'B' ? 'x.x...x.x.x...x.' : 'x...x...x...x...', step)) MUI.kick(t); if(hit('....x.......x...', step)) MUI.snare(t, 0.36); if(step % 2 === 0) MUI.hat(t, 0.05); }
+      if(step === 0 && S.sbar % 4 === 0) MUI.crash(t, 0.14);
+      const gt = {w:'sawtooth', cut:2400, q:0.7, g:0.055, s:0.8, d:0.1, dist:true};
+      if(sec === 'A'){ if(step % 2 === 0) for(const n of [N(ch, -1), N(ch, -1) + 7]) muTone(t, n, s16*0.8, Object.assign({}, gt, {cut:1300})); }
+      else if(hit('X.....X.....X...', step)) for(const n of [N(ch, -1), N(ch, -1) + 7, N(ch, -1) + 12]) muTone(t, n, s16*(sec === 'I' ? 10 : 5.5), gt);
+      if(step % 2 === 0) muTone(t, N(ch, -2), s16*1.6, {w:'square', cut:520, g:0.1, s:0.7});
+      if(sec === 'B') muLead(S, this.lead, (d, len) => muTone(t, N(d, 1), len*0.95, {waves:[['square', 0], ['sawtooth', 7]], cut:3800, g:0.07, s:0.85, vib:13}));
+      if(sec === 'A' && step % 4 === 0){ const ar = [0, 2, 4, 7]; muTone(t, N(ch + ar[(step/4) % 4], 1), s16*1.5, {w:'square', cut:2800, g:0.03, s:0.3, d:0.08}); }
+    }},
+  {id:'sc_intermission', mood:'intermission', name:'Training Grounds', sub:'Chill Hip-Hop · 94 BPM', bpm:94, root:53, scale:[0, 2, 4, 5, 7, 9, 11],
+    prog:{I:[0, 5, 3, 4], A:[0, 5, 3, 4, 0, 5, 3, 4], B:[3, 4, 2, 5, 3, 4, 1, 4]},
+    lead:['4 _ _ 2 _ 4 5 _', '4 _ 2 _ 0 _ _ _', '4 _ _ 2 _ 4 5 _', '7 _ 6 _ 4 _ _ _', '5 _ _ 4 _ 2 _ 4', '2 _ 1 _ 0 _ _ _', '2 _ 4 _ 5 _ 7 _', '6 _ _ _ 4 _ _ _'],
+    step(S){ const {t, N, ch, step, sec} = S, s16 = S.e/2;
+      if(sec !== 'I' || S.sbar >= 2){ if(hit('x.....x...x.....', step)) MUI.kick(t, 0.65); if(hit('....x.......x...', step)) MUI.snare(t, 0.2); if(step % 2 === 0) MUI.hat(t, step % 4 === 2 ? 0.035 : 0.02); }
+      const ar = [0, 2, 4, 6, 7, 6, 4, 2]; if(step % 2 === 0) muTone(t, N(ch + ar[(step/2) % 8], 0), s16*1.4, {waves:[['sine', 0], ['triangle', 1200]], cut:2400, g:0.028, a:0.002, d:0.12, s:0.15, rel:0.15});
+      if(step === 0 || step === 6 || step === 10) muTone(t, N(ch, -2), s16*(step === 0 ? 5 : 3), {w:'sine', cut:450, g:0.15, s:0.85});
+      if(step === 0) muTone(t, N(ch + 2, 0), S.e*8, MU_PAD(0.016, 900));
+      if(sec === 'B') muLead(S, this.lead, (d, len) => muTone(t, N(d, 1), len*0.85, {waves:[['sine', 0], ['sine', 1205]], cut:3000, g:0.045, s:0.5, d:0.3, vib:7, rel:0.2}));
+    }},
+  {id:'sc_prematch', mood:'prematch', name:'Face-Off', sub:'Tension · 124 BPM', bpm:124, root:50, scale:[0, 1, 3, 5, 7, 8, 10],
+    prog:{I:[0, 0, 0, 0], A:[0, 0, 1, 1, 0, 0, 5, 4], B:[0, 1, 0, 4, 0, 1, 5, 4]},
+    lead:['0 _ _ _ 1 _ _ _', '0 _ _ _ - - - -', '3 _ _ _ 1 _ _ _', '0 _ _ _ - - - -', '4 _ _ _ 5 _ 4 _', '3 _ _ _ 1 _ _ _', '5 _ 4 _ 3 _ 1 _', '0 _ _ _ _ _ _ _'],
+    step(S){ const {t, N, ch, step, sec} = S, s16 = S.e/2;
+      muTone(t, N(ch, -2) + (step % 4 === 2 ? 12 : 0), s16*0.8, {w:'sawtooth', cut:sec === 'I' ? 380 : 620, q:2, g:0.07, s:0.5, d:0.05});
+      if(step === 0) MUI.taiko(t, sec === 'I' ? 0.45 : 0.7);
+      if(sec !== 'I'){ if(step % 4 === 0) MUI.kick(t, 0.75); MUI.hat(t, step % 4 === 2 ? 0.04 : 0.015); }
+      if(sec === 'B' && hit('x..x..x.........', step)) for(const k of [0, 2, 4]) muTone(t, N(ch + k, 0), s16*1.5, {waves:[['sawtooth', -10], ['sawtooth', 10]], cut:2600, g:0.03, s:0.5, fenv:2});
+      if(sec === 'B' && S.sbar % 4 === 3 && step >= 12) MUI.tom(t, 45 - (step - 12)*2, 0.35);
+      if(step === 0) muTone(t, N(ch, 0), S.e*8, MU_PAD(0.02, 700));
+      if(sec === 'B') muLead(S, this.lead, (d, len) => muTone(t, N(d, 1), len*0.95, {waves:[['sawtooth', -6], ['sawtooth', 6]], cut:1500, g:0.05, a:0.08, s:0.9, vib:10}));
+    }},
+  {id:'sc_overtime', mood:'overtime', name:'Sudden Death', sub:'Overtime · 180 BPM', bpm:180, root:49, scale:[0, 1, 3, 5, 7, 8, 10],
+    prog:{I:[0, 1, 0, 1], A:[0, 1, 0, 5, 0, 1, 4, 4], B:[5, 4, 1, 0, 5, 4, 1, 1]},
+    lead:['7 _ 8 _ 7 _ 5 _', '4 _ 5 _ 4 _ 1 _', '0 _ 1 _ 3 _ 4 _', '5 _ _ _ 4 _ _ _', '7 _ 8 _ 7 _ 8 _', '9 _ 8 _ 7 _ 5 _', '4 _ 5 _ 7 _ 8 _', '7 _ _ _ _ _ _ _'],
+    step(S){ const {t, N, ch, step, sec} = S, s16 = S.e/2;
+      if(hit('x.x...x.x.x...x.', step)) MUI.kick(t, 1); if(hit('....x.......x...', step)) MUI.snare(t, 0.4); if(hit('.......x.x....x.', step)) MUI.snare(t, 0.08); MUI.hat(t, step % 2 ? 0.03 : 0.06);
+      if(step === 0 && S.sbar % 2 === 0) MUI.crash(t, 0.13);
+      if(step % 2 === 0) muTone(t, N(ch, -2), s16*1.7, {waves:[['sawtooth', -20], ['sawtooth', 20]], cut:850, q:2, g:0.09, s:0.8, dist:true});
+      if(hit('X..X..X...X..X..', step)) for(const n of [N(ch, -1), N(ch, -1) + 7]) muTone(t, n, s16*2.4, {w:'sawtooth', cut:2200, g:0.05, s:0.8, d:0.1, dist:true});
+      if(sec !== 'I') muLead(S, this.lead, (d, len) => muTone(t, N(d, 1), len*0.9, {waves:[['sawtooth', -7], ['square', 7]], cut:4200, g:0.06, s:0.8, vib:14}));
+    }},
+  {id:'sc_victory', mood:'victory', name:'Victory Lap', sub:'Fanfare · 132 BPM', bpm:132, root:55, scale:[0, 2, 4, 5, 7, 9, 11],
+    prog:{I:[0, 3, 4, 0], A:[0, 3, 4, 0, 5, 3, 4, 4], B:[3, 4, 0, 5, 3, 4, 0, 0]},
+    lead:['4 _ 4 4 7 _ _ _', '6 _ 5 _ 4 _ _ _', '4 _ 4 4 7 _ 9 _', '8 _ _ _ 7 _ _ _', '9 _ 8 _ 7 _ 6 _', '7 _ 4 _ 5 _ _ _', '4 _ 5 _ 6 _ 8 _', '7 _ _ _ _ _ _ _'],
+    step(S){ const {t, N, ch, step, sec} = S, s16 = S.e/2;
+      if(sec !== 'I'){ if(hit('x...x...x...x...', step)) MUI.kick(t, 0.85); if(hit('....x.......x...', step)) MUI.clap(t, 0.3); if(step % 2 === 0) MUI.hat(t, step % 4 === 2 ? 0.06 : 0.03, step % 4 === 2); }
+      if(step === 0 && S.sbar % 4 === 0) MUI.crash(t, 0.14);
+      const br = {waves:[['sawtooth', -8], ['sawtooth', 8]], cut:2600, g:0.035, a:0.02, s:0.7, d:0.15, fenv:1.6};
+      if(sec === 'I' ? hit('x.....x.....x...', step) : hit('x..x..x...x.x...', step)) for(const k of [0, 2, 4]) muTone(t, N(ch + k, 0), s16*(sec === 'I' ? 5 : 1.6), br);
+      if(step % 4 === 0) muTone(t, N(ch, -2), s16*3, {w:'sawtooth', cut:500, g:0.11, s:0.8});
+      muLead(S, this.lead, (d, len) => muTone(t, N(d, 1), len*0.9, {waves:[['sawtooth', -5], ['square', 5]], cut:3200, g:0.06, s:0.85, vib:10, a:0.02}));
+    }},
+  {id:'sc_result', mood:'result', name:'Aftermath', sub:'Reflection · 70 BPM', bpm:70, root:45, scale:[0, 2, 3, 5, 7, 8, 10],
+    prog:{I:[0, 5, 3, 4], A:[0, 5, 3, 4, 0, 5, 6, 4], B:[5, 6, 0, 4, 5, 6, 3, 4]},
+    lead:['4 _ _ _ 3 _ 2 _', '0 _ _ _ _ _ _ _', '2 _ _ _ 3 _ 4 _', '2 _ _ _ _ _ _ _', '4 _ _ _ 5 _ 4 _', '3 _ _ _ 2 _ _ _', '1 _ 2 _ 3 _ 1 _', '0 _ _ _ _ _ _ _'],
+    step(S){ const {t, N, ch, step, sec} = S, s16 = S.e/2;
+      if(step === 0) for(const [k, o] of [[0, -1], [2, 0], [4, 0]]) muTone(t, N(ch + k, o), S.e*8, MU_PAD(0.022, 900));
+      if(step === 0) muTone(t, N(ch, -2), S.e*8, {w:'sine', cut:300, g:0.12, a:0.1, s:1, rel:0.5});
+      if(sec !== 'I' && step % 2 === 0){ const ar = [0, 4, 7, 9, 7, 4, 2, 4]; muTone(t, N(ch, 0) + ar[(step/2) % 8], s16*2.5, MU_PIANO(0.035)); }
+      if(sec === 'B' && step === 8) MUI.kick(t, 0.35);
+      if(sec === 'B') muLead(S, this.lead, (d, len) => muTone(t, N(d, 1), len*0.95, MU_PIANO(0.055)));
+    }},
+  {id:'sc_steal', mood:'steal', name:'Chains', sub:'Dark · 66 BPM', bpm:66, root:41, scale:[0, 1, 3, 5, 7, 8, 10],
+    prog:{I:[0, 0, 0, 0], A:[0, 1, 0, 1, 0, 1, 5, 4], B:[5, 4, 1, 0, 5, 4, 1, 0]},
+    lead:['7 _ _ _ 8 _ _ _', '7 _ _ _ _ _ _ _', '5 _ _ _ 4 _ _ _', '1 _ _ _ _ _ _ _', '7 _ _ _ 8 _ 7 _', '5 _ _ _ 4 _ _ _', '3 _ _ _ 1 _ _ _', '0 _ _ _ _ _ _ _'],
+    step(S){ const {t, N, ch, step, sec} = S, s16 = S.e/2;
+      if(step === 0) muTone(t, N(ch, -1), S.e*8, {waves:[['sawtooth', -6], ['sawtooth', 6]], cut:240, q:3, g:0.12, a:0.3, s:1, rel:0.6});
+      if(sec !== 'I' && hit('x.........x.....', step)) MUI.taiko(t, 0.85);
+      if(step === 0 || step === 6) muTone(t, N(ch + (step ? 2 : 0), 1), S.e*6, MU_BELL(0.028));
+      if(step === 8 && S.sbar % 2) for(let i = 0; i < 3; i++) muNoise(t + i*0.07, 0.09, {ft:'bandpass', f:3200 + i*500, q:6, g:0.05});   // Kettenklirren
+      if(sec === 'B' && step === 0) for(const k of [0, 2, 4]) muTone(t, N(ch + k, 0), S.e*8, {waves:[['sine', -5], ['triangle', 5]], cut:1400, g:0.022, a:0.7, s:1, rel:0.8});
+      if(sec === 'B') muLead(S, this.lead, (d, len) => muTone(t, N(d, 0), len*0.95, {waves:[['sawtooth', -4], ['sawtooth', 4]], cut:900, g:0.05, a:0.15, s:1, vib:6, rel:0.4}));
+    }},
+  {id:'sc_farewell', mood:'farewell', name:'Farewell', sub:'Piano · 72 BPM', bpm:72, root:52, scale:[0, 2, 3, 5, 7, 8, 10],
+    prog:{I:[0, 5, 2, 6], A:[0, 5, 2, 6, 0, 5, 3, 4], B:[5, 6, 2, 0, 5, 6, 3, 4]},
+    lead:['4 _ _ 3 2 _ _ _', '0 _ _ _ 2 _ _ _', '3 _ _ 2 1 _ _ _', '4 _ _ _ _ _ _ _', '7 _ _ 6 4 _ _ _', '5 _ _ 4 3 _ _ _', '2 _ 3 _ 4 _ 2 _', '0 _ _ _ _ _ _ _'],
+    step(S){ const {t, N, ch, step, sec} = S, s16 = S.e/2;
+      if(step % 2 === 0){ const ar = [0, 2, 4, 7, 9, 7, 4, 2]; muTone(t, N(ch + ar[(step/2) % 8], 0), s16*3, MU_PIANO(0.04)); }
+      if(step === 0) muTone(t, N(ch, -2), S.e*8, {waves:[['triangle', 0], ['sine', 0]], cut:600, g:0.13, a:0.01, d:1.2, s:0.4, rel:0.6});
+      if(sec === 'B' && step === 0) for(const k of [0, 2, 4]) muTone(t, N(ch + k, 0), S.e*8, MU_PAD(0.018, 1300));
+      if(sec !== 'I') muLead(S, this.lead, (d, len) => muTone(t, N(d, 1), len*0.95, MU_PIANO(0.06)));
+    }},
+  {id:'sc_champion', mood:'champion', name:'Crowned', sub:'Epic Ceremony · 100 BPM', bpm:100, root:50, scale:[0, 2, 4, 5, 7, 9, 11],
+    prog:{I:[0, 4, 5, 3], A:[0, 4, 5, 3, 0, 4, 3, 4], B:[3, 4, 5, 2, 3, 4, 0, 0]},
+    lead:['0 _ _ _ 4 _ _ _', '7 _ _ 6 _ 4 _ _', '5 _ _ _ 4 _ 3 _', '4 _ _ _ _ _ _ _', '7 _ _ _ 8 _ 9 _', '9 _ _ 8 _ 7 _ _', '8 _ 7 _ 6 _ 5 _', '7 _ _ _ _ _ _ _'],
+    step(S){ const {t, N, ch, step, sec} = S, s16 = S.e/2;
+      if(hit(sec === 'B' ? 'x..x..x.x.x.x...' : 'x.....x.x.......', step)) MUI.taiko(t, sec === 'I' ? 0.5 : 0.8);
+      if(sec !== 'I' && hit('....x.......x...', step)) MUI.snare(t, 0.25);
+      if(step === 0 && S.sbar % 4 === 0) MUI.crash(t, 0.13);
+      if(step === 0) for(const [k, o] of [[0, -1], [2, 0], [4, 0], [0, 1]]) muTone(t, N(ch + k, o), S.e*8, MU_PAD(0.026, sec === 'B' ? 1800 : 1200));
+      if(step === 0 || step === 8) muTone(t, N(ch + 4, 1), S.e*4, MU_BELL(0.022));
+      if(step === 0) muTone(t, N(ch, -2), S.e*8, {w:'sawtooth', cut:320, g:0.09, s:1, rel:0.3});
+      if(sec === 'A' && step % 2 === 0){ const os = [0, 2, 4, 2]; muTone(t, N(ch + os[(step/2) % 4], 1), s16*0.8, {w:'square', cut:2400, g:0.025, s:0.3, d:0.06}); }
+      if(sec === 'B') muLead(S, this.lead, (d, len) => muTone(t, N(d, 1), len*0.95, {waves:[['sawtooth', -6], ['sawtooth', 6]], cut:2200, g:0.075, a:0.05, s:0.9, vib:13}));
+    }},
+  {id:'sc_gacha', mood:'gacha', name:'Soul Summon', sub:'Mystic · 112 BPM', bpm:112, root:54, scale:[0, 2, 4, 6, 7, 9, 11],
+    prog:{I:[0, 1, 0, 1], A:[0, 1, 5, 4, 0, 1, 5, 4], B:[3, 4, 5, 1, 3, 4, 5, 4]},
+    lead:['7 _ 6 _ 4 _ 6 _', '7 _ _ _ 4 _ _ _', '8 _ 7 _ 6 _ 4 _', '6 _ _ _ _ _ _ _', '7 _ 9 _ 8 _ 7 _', '6 _ 4 _ 6 _ _ _', '4 _ 6 _ 7 _ 9 _', '11 _ _ _ _ _ _ _'],
+    step(S){ const {t, N, ch, step, sec} = S, s16 = S.e/2;
+      const ar = [0, 2, 4, 6, 7, 6, 4, 2]; muTone(t, N(ch + ar[step % 8], 2), s16*1.5, {waves:[['sine', 0], ['sine', 1200]], cut:6000, g:0.016, a:0.002, d:0.1, s:0.1, rel:0.2});
+      if(step === 0) muTone(t, N(ch, -2), S.e*8, {w:'sine', cut:300, g:0.14, a:0.05, s:1, rel:0.4});
+      if(step === 0 || step === 8) muTone(t, N(ch + 4, 1), S.e*5, MU_BELL(0.024));
+      if(sec !== 'I'){ if(step % 8 === 0) MUI.kick(t, 0.6); if(step === 8) MUI.clap(t, 0.2); MUI.hat(t, (S.sbar % 4 === 3 && step >= 12) ? 0.04 : step % 2 ? 0.012 : 0.025); }
+      if(step === 0) for(const k of [0, 2, 4]) muTone(t, N(ch + k, 0), S.e*8, {waves:[['triangle', -7], ['triangle', 7]], cut:1800, g:0.018, a:0.6, s:1, rel:0.6});
+      if(sec === 'B') muLead(S, this.lead, (d, len) => muTone(t, N(d, 1), len*0.9, {waves:[['sine', 0], ['triangle', 1200]], cut:5000, g:0.05, s:0.6, d:0.3, vib:11, rel:0.3}));
+    }},
+];
+// Welche Szene → welche Stimmung (unbekannte/kurze Szenen mitten im Kampf behalten die laufende Musik)
+const MU_SCENE_MOOD = {intro:'opening', 'wc-intro':'opening', matchintro:'prematch', 'wc-lineup':'prematch', 'rival-face':'prematch', intermission:'intermission',
+  ko:'result', 'wc-result':'result', 'wc-duelresult':'result', 'tw-hdresult':'result', steal:'steal', 'cm-chains':'steal', 'cm-verdict':'steal', 'tw-prison':'steal', 'tw-decree':'steal', 'tw-curse':'steal',
+  farewell:'farewell', cut:'farewell', champion:'champion', 'wc-champion':'champion', 'tw-honor':'champion', gacha:'gacha'};
+const MU_MOODS = {}; for(const tr of MU_SCENE_TRACKS) MU_MOODS[tr.mood] = tr;
+const MUS = {on:true, mood:'free', want:'free', wantT:0, gT:null, duckSeen:null};
+try{ MUS.on = localStorage.getItem('ra_scmusic') !== '0'; }catch(e){}
+function muMood(){
+  if(!MUS.on) return 'free';
+  const sc = typeof SSC !== 'undefined' && SSC.cur && SSC.cur.scene;
+  if(sc){ const m = MU_SCENE_MOOD[sc.name]; return m || MUS.mood; }
+  if(typeof SS === 'undefined' || !SS.active) return 'free';
+  if(SS.live && ctx.mode === 'battle'){
+    if(battle.phase === 'over') return 'victory';
+    if(battle.phase === 'fight' && battle.ot) return 'overtime';
+    if(battle.phase === 'fight' || battle.phase === 'countdown') return 'fight';
+    return MUS.mood;
+  }
+  return 'lobby';
+}
+const _muPickBase = muPick;
+muPick = function(){ const tr = MU_MOODS[MUS.mood]; return tr || _muPickBase(); };
+function muSwitch(mood){
+  const c = AU.ctx, prev = MUS.mood; MUS.mood = mood;
+  const fromScene = !!MU_MOODS[prev], toScene = !!MU_MOODS[mood];
+  if(!fromScene && !toScene) return;          // Kampf ↔ freies Spiel: Kampfmusik läuft einfach weiter
+  if(!c || !AU.music) return;
+  const now = c.currentTime, g = AU.music.gain;
+  g.cancelScheduledValues(now); g.setValueAtTime(Math.max(0.0001, g.value), now); g.setTargetAtTime(0.0001, now, 0.12);
+  muStartTrack(muPick(), now + 0.5);
+  clearTimeout(MUS.fadeT); MUS.fading = true; MUS.fadeT = setTimeout(() => { MUS.fading = false; MUS.gT = null; muGain(true); }, 480);
+}
+// Szenen-Tracks sind die eigentliche Szenenmusik → in Cutscenes kaum abgesenkt
+function muGain(force){
+  const c = AU.ctx; if(!c || !AU.music) return;
+  const tgt = MU_MOODS[MUS.mood] ? Math.max(MU.duck, 0.9) : MU.duck;
+  if(force || tgt !== MUS.gT || MU.duck !== MUS.duckSeen){ MUS.gT = tgt; MUS.duckSeen = MU.duck; AU.music.gain.setTargetAtTime(tgt, c.currentTime, 0.3); }
+}
+setInterval(() => {
+  const c = AU.ctx; if(!c) return;
+  const m = muMood();
+  if(m !== MUS.want){ MUS.want = m; MUS.wantT = performance.now(); }
+  if(MUS.want !== MUS.mood && performance.now() - MUS.wantT > 450) muSwitch(MUS.want);
+  else if(!MUS.fading) muGain();
+}, 100);
+// Optionen: Szenenmusik an/aus + Anzeige
+(function muSceneUi(){
+  const P = document.getElementById('opt-panel'); if(!P) return;
+  const row = document.createElement('label'); row.innerHTML = `Scene music<input type="checkbox" id="opt-scmusic" style="justify-self:start;width:18px;height:18px;accent-color:var(--crimson,#e8323c)"><span></span>`;
+  const sel = P.querySelector('#opt-song'); (sel ? sel.closest('label') : P.querySelector('.row')).after(row);
+  const cb = row.querySelector('input'); cb.checked = MUS.on;
+  cb.onchange = () => { MUS.on = cb.checked; try{ localStorage.setItem('ra_scmusic', MUS.on ? '1' : '0'); }catch(e){} };
+  const hint = P.querySelector('.hint'); if(hint) hint.insertAdjacentHTML('beforeend', ' “Scene music” gives every tournament scene its own soundtrack (lobby, opening, intermission, face-off, overtime, victory, aftermath, steal, farewell, ceremony, gacha). “Song” picks the fight music.');
+})();
+try{ Object.assign(window.__arena, {MUS, muMood, MU_SCENE_TRACKS, muNow:() => MU.tr && MU.tr.id, battle, liveRagdolls:() => ragdolls}); }catch(e){}
 requestAnimationFrame(frame);
 } // startGame
 </script>
