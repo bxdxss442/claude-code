@@ -22354,7 +22354,7 @@ function scGacha(src){
         if(t > (ult ? 2.0 : 1.6) && !F.lit){ F.light(col); F.g.position.copy(FP[i]); scFlash(col, 0.5, 0, ult ? 0.75 : 0.5); avRing(F.g.position.clone(), col, ult ? 5 : 3, 0.5); fovPunch(ult ? -8 : -4); shake = ult ? 0.3 : 0.1;
           emitParticles(F.g.position.x, F.g.position.y + 0.3, F.g.position.z, ult ? 90 : 45, {speed:ult ? 6 : 4, up:1, color:col, size:0.25, life:0.8, gravity:0, drag:1.5});
           ssS(M.tier >= 4 || ult ? 'fanfare' : 'chime', {gain:0.7}); if(M.tier >= 4 || ult){ ssS('chorus', {gain:0.5}); speedLines(1, 0.8, col); }
-          gcCard({col, rar:`${ult ? 'ULTIMATE · ' : `TECHNIQUE ${i + 1} · `}${Rr[0]} ${'★'.repeat(M.tier)}`, name:kdLabel(id), meta:`${ssMoveElems(id).map(e => SS_ELEM[e] ? `${SS_ELEM[e].k} ${SS_ELEM[e].label}` : e).join(' · ')} · ${ST_INFO[M.stat].label}${M.th ? ` ${M.th}+` : ''}`, desc:gcMoveText(id, ult)});
+          gcCard({col, rar:`${ult ? 'ULTIMATE · ' : `TECHNIQUE ${i + 1} · `}${Rr[0]} ${'★'.repeat(M.tier)}`, name:kdLabel(id), meta:`${ssMoveElems(id).map(e => SS_ELEM[e] ? `${SS_ELEM[e].k} ${SS_ELEM[e].label}` : e).join(' · ')} · ${ST_INFO[M.stat].label}${M.th ? ` ${M.th}+` : ''}`, desc:gcMoveText(id, ult) + (() => { try{ const V = varInfo(id, varOfPlayer(f, id)); return ` Variant – ${V.n}: ${V.d}.`; }catch(e){ return ''; } })()});
           scKanji(ult ? '奥義' : '術'); } },
       cam(D, k, t){ const p = FP[i], lit = D.fl[i] && D.fl[i].lit; const dir = V3(p.x, 0, p.z).normalize();
         const dd = lit ? 3.6 : 3.0 - k*0.3; return {p:V3(p.x + dir.x*dd - dir.z*0.9, p.y + 0.35, p.z + dir.z*dd + dir.x*0.9), l:V3(p.x*0.5, p.y - 0.05, p.z*0.5), fov:lit ? 50 : 46}; }}; });
@@ -23050,6 +23050,255 @@ function jjMigrate(st){
 const _jjLoad = ssLoad; ssLoad = function(){ _jjLoad(); try{ jjMigrate(SS.st); ssSave(); }catch(e){ console.warn('JJ migrate', e); } };
 try{ if(SS.st) { jjMigrate(SS.st); ssSave(); } }catch(e){}
 try{ Object.assign(window.__arena, {JJ_LIST}); }catch(e){}
+
+
+
+/* ================= Varianten: jede Technik läuft bei verschiedenen Kämpfern anders ab (v63) ================= */
+// Während eine Technik läuft, hängt ein Varianten-Kontext an allem, was sie erzeugt (Geschosse, Beschwörungen, Flächen,
+// Strahlen, verzögerte Effekte, Buffs, Domänen). Die Variante verändert diese Bausteine – das Grundprinzip bleibt.
+// Welche Bausteine eine Technik nutzt, wurde gemessen (VAR_USE); daraus ergeben sich je Technik drei passende Varianten.
+// Gemessen: welche Bausteine jede Technik nutzt (b Geschoss, o eigenes Geschoss, p Kit-Geschoss, r Läufer, s/u Beschwörung, a Fläche, c Kegel, l Linie/Strahl, f Buff, d Domäne, m Nahkampf, x nichts davon)
+const VAR_USE = {"yj_barrage":"m","yj_cut":"x","yj_counter":"x","mg_bird":"u","mg_rabbits":"u","mg_shadow":"mu","gd_red":"ao","gd_blue":"u","gd_counter":"x","yr_blade":"m","yr_touch":"x","yr_spikes":"a","ds_dice":"p","ds_doors":"u","ds_allin":"o","to_clap":"x","to_feint":"x","to_strike":"x","je_call":"u","je_bind":"x","je_bomb":"au","yk_mass":"x","yk_garuda":"l","yk_dive":"a","is_blast":"l","is_salvo":"l","is_burst":"a","nx_divergent":"x","nx_ratio":"x","nx_blood":"l","nx_speech_halt":"x","nx_speech_burst":"a","nx_nails":"p","nx_resonance":"x","nx_embers":"au","nx_buds":"au","nx_frames":"m","nx_lightning":"x","nx_frost":"u","nx_rct":"x","nx_simple":"f","nx_focus":"f","nx_spear":"m","nx_chain":"l","nx_copy":"x","jx_dismantle":"l","jx_cleave":"x","jx_fuga":"ab","jx_web":"a","jx_worldcut":"l","jx_kamutoke":"al","jx_lapse":"au","jx_reversal":"c","jx_blink":"m","jx_scales":"f","jx_bloodorbs":"b","jx_bloodbind":"l","jx_bloodnova":"al","jx_hairpin":"a","jx_strawdoll":"x","jx_overtime":"f","jx_collapse":"a","jx_construct":"b","jx_sleep":"x","jx_twist":"x","jx_cloud":"cm","jx_splitsoul":"m","jx_chainwhirl":"al","jx_frametrap":"a","jx_icefall":"au","jx_frostcalm":"a","jx_volcano":"a","jx_flamewall":"a","jx_woodball":"a","jx_flowers":"a","jx_tide":"c","jx_fishes":"u","jx_bodyweapon":"x","jx_isomers":"u","jx_barrier":"u","jx_iai":"l","jx_antigrav":"x","jx_maelstrom":"b","jx_skyflip":"f","jx_judgment":"x","jx_execution":"m","jx_gavel":"a","jx_omen":"a","jx_kirin":"f","jx_dragonbone":"f","jx_kickrush":"m","jx_birdstrike":"b","jx_puppet":"lu","jx_toad":"l","jx_orochi":"a","kx_dogs":"ru","kx_elephant":"a","kx_deer":"x","kx_ox":"ru","kx_purelove":"l","kx_gorilla":"x","kx_jacob":"a","kx_stars":"x","kx_moon":"lr","kx_decay":"b","kx_slicing":"s","kx_blackflash":"m","kx_broom":"c","kx_roaches":"r","kx_truck":"r","kx_smallpox":"x","kx_dragon":"s","kx_kuchisake":"x","kx_gpen":"f","kx_trails":"ar","jj_purple":"r","jj_nue":"ab","jj_tiger":"a","jj_mahoraga":"al","jj_blastaway":"c","jj_ultracannon":"l","jj_rootprison":"a","jj_disaster":"c","jj_piercing":"l","jj_bloodmeteor":"b","jj_nyoibo":"lm","jj_insectarmor":"f","jj_rikaarm":"x","jj_manji":"m","jj_wicker":"f","jj_domamp":"f","jj_blazing":"cm","jj_ryu":"ar","jj_kaichi":"c","jj_uiui":"x","jj_wingking":"x","jj_roughenergy":"cm","jj_heartcatch":"b","jj_sharks":"r","jj_bodyrepel":"af","jj_run":"x","jj_yutaslash":"lm","jj_reiki":"f","jj_yaga":"mr","jj_hazenoki":"ab","yj_demon":"f","mg_garden":"df","gd_void":"d","yr_domain":"adfs","ds_jackpot":"df","to_ult":"x","je_ult":"u","yk_ult":"au","is_ult":"l","nx_u_meteor":"a","nx_u_crush":"x","nx_u_blood":"afl","nx_u_beast":"flm","nx_u_ice":"u","nx_u_rika":"au","u_volcano":"d","u_ocean":"d","u_court":"d","u_swords":"d","u_moon":"df","u_sphere":"df","u_wheel":"f","u_heavenly":"f","u_zone":"f","u_comedian":"f","u_isomer":"fu","u_rope":"f","u_uzumaki":"x","u_granite":"x","u_starrage":"x","u_thinice":"x","u_spear":"x","u_general":"x","u_isoswarm":"r","u_receipt":"x"};
+const VAR = {cur:null, prof:null};
+const VAR_ROOT = {}; for(const [root, m] of Object.entries(UPG_VARIANT)) for(const v of Object.values(m)) VAR_ROOT[v] = root;
+const varRootId = (id) => VAR_ROOT[id] || id;
+let VAR_POOL = null; const varPool = () => VAR_POOL || (VAR_POOL = new Set([...movePool(), ...ultPool()]));
+function varRun(ctx, fn, self, args){ const prev = VAR.cur; VAR.cur = ctx; try{ return fn.apply(self, args); } finally { VAR.cur = prev; } }
+const varMark = (f) => { const c = VAR.cur; if(c && VAR.prof) (VAR.prof[c.id] = VAR.prof[c.id] || new Set()).add(f); };
+const varOwner = (att) => { if(!att) return null; const o = att.cs && (att.cs.minionOf || att.cs.summoner); return o || att; };
+
+/* ---------- Archetypen ---------- */
+// Felder: dmg, speed, size, count, homing (true/false), radius, echo (Sekunden; zweite Auslösung), echoDmg, wind (Aufziehen ×), cd, buff (Dauer ×), share, heal, dom ('open'|'compact'), twin
+const VAR_ARCH = {
+  seeker:   {n:'Seeker',      d:'Slower, but homes in on its target',                 speed:0.6, homing:true, dmg:1.0},
+  lance:    {n:'Lance',       d:'Much faster, but flies dead straight',               speed:1.7, homing:false, dmg:1.2, size:0.75},
+  volley:   {n:'Volley',      d:'Twice as many, each one weaker',                     count:2, dmg:0.6, size:0.8},
+  colossus: {n:'Colossus',    d:'One giant version – slow and devastating',           size:2.0, speed:0.7, dmg:1.6, radius:1.3, single:true},
+  horde:    {n:'Horde',       d:'Summoned twice – smaller and weaker each',           echo:0.05, echoDmg:0.55, size:0.75, dmg:0.55},
+  swiftsum: {n:'Swift Pack',  d:'Much faster, a little weaker',                       speed:1.6, dmg:0.85, wind:0.6},
+  wide:     {n:'Wide',        d:'Much larger area, less damage',                      radius:1.5, dmg:0.75},
+  focus:    {n:'Focused',     d:'Small area, hits much harder',                       radius:0.65, dmg:1.45},
+  after:    {n:'Aftershock',  d:'Strikes a second time shortly after',                echo:0.6, echoDmg:0.5, dmg:0.9},
+  snap:     {n:'Snap',        d:'Triggers almost instantly, slightly weaker',         tele:0.45, wind:0.6, dmg:0.85},
+  lasting:  {n:'Enduring',    d:'Lasts much longer',                                  buff:1.6, cd:1.15},
+  surge:    {n:'Surge',       d:'Short, but heals you on activation',                 buff:0.6, heal:0.12, cd:0.85},
+  shared:   {n:'Shared',      d:'The nearest ally receives it too',                   buff:0.85, share:true},
+  swift:    {n:'Swift',       d:'Faster wind-up and cooldown, less damage',           wind:0.5, cd:0.8, dmg:0.82},
+  heavy:    {n:'Heavy',       d:'Slower wind-up, hits much harder',                   wind:1.45, dmg:1.4, cd:1.1, kb:1.6},
+  twin:     {n:'Twin Strike', d:'Every hit lands twice (second one weaker)',          twin:0.55, dmg:0.85},
+  closed:   {n:'Closed Domain', d:'The classic barrier – nobody escapes',              dmg:1.0},
+  open:     {n:'Open Domain', d:'No barrier, covers the whole arena, but weaker',     dom:'open', dmg:0.6},
+  compact:  {n:'Compressed Domain', d:'A tiny barrier with a brutal sure-hit',        dom:'compact', dmg:1.4},
+  reckless: {n:'Reckless',    d:'Hits much harder, but costs some of your own health', dmg:1.3, selfCost:0.08},
+};
+// Welche Archetypen zu welchen gemessenen Bausteinen passen
+const VAR_FOR = {u:['horde', 'colossus', 'swiftsum'], o:['seeker', 'lance', 'volley', 'colossus'], d:['closed', 'open', 'compact'], s:['horde', 'colossus', 'swiftsum'], r:['horde', 'colossus', 'swiftsum', 'lance'], b:['seeker', 'lance', 'volley', 'colossus'], p:['seeker', 'lance', 'volley', 'colossus'],
+  a:['wide', 'focus', 'after', 'snap'], c:['wide', 'focus', 'after'], l:['wide', 'focus', 'after'], f:['lasting', 'surge', 'shared'], m:['swift', 'heavy', 'twin'], x:['swift', 'heavy', 'after']};
+const VAR_PRIO = ['d', 's', 'r', 'b', 'p', 'o', 'f', 'a', 'l', 'c', 'm', 'u', 'x'];
+const varHash = (s) => { let h = 2166136261; for(let i = 0; i < s.length; i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; };
+function varList(id){
+  id = varRootId(id); if(VAR_LIST_CACHE[id]) return VAR_LIST_CACHE[id];
+  const use = (typeof VAR_USE !== 'undefined' && VAR_USE[id]) || 'x', flags = VAR_PRIO.filter(f => use.includes(f)), out = [], h = varHash(id);
+  if(flags.includes('d')) out.push('closed', 'open', 'compact');
+  // Haupt-Baustein liefert die meisten Varianten: 1 Baustein → 3, 2 → 2+1, mehr → je 1
+  const quota = flags.length === 1 ? [3] : flags.length === 2 ? [2, 1] : flags.map(() => 1);
+  flags.forEach((f, fi) => { if(f === 'd') return; const L = VAR_FOR[f], o = h % L.length; let q = quota[fi] || 0; for(let i = 0; i < L.length && q > 0 && out.length < 3; i++){ const k = L[(o + i) % L.length]; if(!out.includes(k)){ out.push(k); q--; } } });
+  for(const k of ['swift', 'heavy', 'after', 'wide', 'focus']) if(out.length < 3 && !out.includes(k)) out.push(k);
+  // Ultimates werden nie doppelt ausgelöst (keine zweite Sequenz)
+  if(ATTACKS[id] && ATTACKS[id].cost >= 100) for(let i = 0; i < out.length; i++) if(out[i] === 'after' || out[i] === 'horde') out[i] = out.includes('reckless') ? (out.includes('heavy') ? 'swift' : 'heavy') : 'reckless';
+  return (VAR_LIST_CACHE[id] = out.slice(0, 3));
+}
+const VAR_LIST_CACHE = {};
+const varInfo = (id, i) => { const k = varList(id)[i]; return Object.assign({key:k, i}, VAR_ARCH[k]); };
+// Welche Variante hat dieser Kämpfer? (Turnier: gespeichert am Spieler, sonst fest aus dem Namen)
+function varIndexFor(r, id){
+  id = varRootId(id);
+  if(r && r.ssId != null && typeof SS !== 'undefined' && SS.st && SS.st.players[r.ssId]){ const p = SS.st.players[r.ssId]; return varOfPlayer(p, id); }
+  if(r && r.gcVars && r.gcVars[id] != null) return r.gcVars[id];
+  return varHash((r && (r.kit && r.kit.key || r.name) || '') + '|' + id) % 3;
+}
+function varOfPlayer(p, id){ id = varRootId(id); p.vars = p.vars || {}; if(p.vars[id] == null) p.vars[id] = varHash((p.uid || p.orig || p.name || '') + '|' + id) % 3; return p.vars[id]; }
+function varCtx(r, id){
+  const root = varRootId(id); if(!varPool().has(root)) return null;
+  r.cs.vctx = r.cs.vctx || {}; const i = varIndexFor(r, root), c = r.cs.vctx[root];
+  if(c && c.i === i) return c;
+  return (r.cs.vctx[root] = Object.assign({r, id:root}, varInfo(root, i)));
+}
+
+/* ---------- Kontext in den Lebenszyklus einer Technik einhängen ---------- */
+const _varStart = Ragdoll.prototype.startAttack;
+Ragdoll.prototype.startAttack = function(id){
+  const c = VAR.prof ? {r:this, id:varRootId(id), dmg:1} : varCtx(this, id);
+  if(!c) return _varStart.call(this, id);
+  const out = varRun(c, _varStart, this, [id]);
+  if(this.attack && c.wind && c.wind !== 1){ const def = ATTACKS[id]; this.attack.t += (def.w || 0)*(1 - c.wind); }
+  return out;
+};
+const _varCombat = Ragdoll.prototype.updateCombat;
+Ragdoll.prototype.updateCombat = function(dt){
+  const A = this.attack; if(!A) return _varCombat.call(this, dt);
+  const c = VAR.prof ? {r:this, id:varRootId(A.id), dmg:1} : varCtx(this, A.id); if(!c) return _varCombat.call(this, dt);
+  const ph0 = A.phase, out = varRun(c, _varCombat, this, [dt]);
+  // Zweite Auslösung (Horde/Nachbeben): aktive Phase noch einmal
+  const useF = VAR_USE[c.id] || '', echo = c.echo || (c.count > 1 && !/[bpr]/.test(useF) ? 0.12 : 0);
+  if(!VAR.prof && echo && ph0 !== 'a' && A.phase === 'a' && !A.varEcho){ A.varEcho = true; const def = ATTACKS[A.id], self = this;
+    after(echo, () => { if(!alive(self)) return; const e = Object.assign({}, c, {dmg:(c.echoDmg || c.dmg || 0.5), echo:0, count:1, size:c.size}); varRun(e, () => { if(def.onActive) def.onActive(self, A, def); if(def.projectile) fireProjectiles(self, def); if(def.aoe) detonateAoe(self, def); }, null, []); }); }
+  return out;
+};
+const _varCast = Ragdoll.prototype.cast;
+Ragdoll.prototype.cast = function(id){
+  const c0 = VAR.prof ? {r:this, id:varRootId(id), dmg:1} : varCtx(this, id);
+  const ok = c0 ? varRun(c0, _varCast, this, [id]) : _varCast.call(this, id); if(!ok || VAR.prof) return ok;
+  const c = c0; if(!c) return ok;
+  if(c.cd && this.skillCd[id] > 0) this.skillCd[id] *= c.cd;
+  if(c.heal){ this.hp = Math.min(this.maxHp, this.hp + this.maxHp*c.heal); spawnSfx(this.parts.head.p, '+' + Math.round(this.maxHp*c.heal), 'mint'); }
+  if(c.selfCost){ this.hp = Math.max(1, this.hp - this.maxHp*c.selfCost); spawnSfx(this.parts.head.p, '−' + Math.round(this.maxHp*c.selfCost), 'red'); }
+  return ok;
+};
+// Verzögerte Effekte und Entitäten tragen den Kontext weiter
+const _varAfter = after;
+after = function(sec, fn){ const c = VAR.cur; return _varAfter(sec, c ? () => varRun(c, fn, null, []) : fn); };
+// Klassen → Baustein: b = freies Geschoss, o = eigenes Geschoss, r = Läufer, s = Beschwörung, a = Fläche, l = Strahl, d = Domäne (Deko zählt nicht)
+const VAR_CLS = {BirdEntity:'s', RabbitSwarm:'s', HandOrb:'s', SmallHand:'s', EmberBug:'s', RikaFx:'s', JxTurret:'s', KxDragon:'s', KxDisk:'s', CGMind:'',
+  RedOrb:'o', PurpleBall:'o', FireArrow:'o', FishBolt:'o', CurseBomb:'o', Coin:'o',
+  SpikeRing:'a', Puddle:'a', HazardPool:'a', GroundSpikes:'a', TidalWave:'a', Whirlpool:'a', BlackHole:'a', RootWave:'a', JxZone:'a', JxWall:'a', JxRise:'a', KxTrail:'a', Telegraph:'a', HandsDomain:'a', BeamFx:'l'};
+function varClassFlag(e){ if(e instanceof _VarJxBolt) return 'b'; if(e instanceof _VarKxRunner) return 'r'; if(e instanceof Domain) return 'd'; const nm = e.constructor && e.constructor.name; if(!nm || nm === 'Object') return 'u'; return VAR_CLS[nm] || ''; }
+// Modelle einer Entität skalieren (eigene Felder mit 3D-Objekten, auch Listen wie bei Hasen-Schwärmen)
+function varScaleEntity(e, k){ const done = new Set(), sc = (o) => { if(o && o.isObject3D && !done.has(o) && o.parent){ done.add(o); o.scale.multiplyScalar(k); } };
+  for(const key of Object.keys(e)){ const v = e[key]; if(!v || key === 'owner' || key === '_vctx') continue; if(v.isObject3D) sc(v); else if(Array.isArray(v)) for(const it of v.slice(0, 40)){ if(it && it.isObject3D) sc(it); else if(it && it.g && it.g.isObject3D) sc(it.g); else if(it && it.m && it.m.isObject3D) sc(it.m); } } }
+const _varAdd = addEntity;
+addEntity = function(e){
+  const c = VAR.cur;
+  if(c && e && !e._vctx){ e._vctx = c; const fl = varClassFlag(e); if(fl) varMark(fl);
+    const up = e.update; e.update = function(dt){ return varRun(c, up, this, [dt]); };
+    if(!VAR.prof && !(e instanceof Domain)){
+      if(c.size && c.size !== 1 && !(e instanceof _VarJxBolt) && !(e instanceof _VarKxRunner) && fl && fl !== 'a') varScaleEntity(e, c.size);
+      if(fl === 'o' || fl === 's' || fl === 'u'){ if(c.speed && e.vel && e.vel.isVector3) e.vel.multiplyScalar(c.speed); if(c.speed && typeof e.speed === 'number') e.speed *= c.speed;
+        if(c.homing === false){ for(const k of ['target', 'homing', 'T']) if(e[k] && e[k].core) e['_v' + k] = e[k]; }
+        if(c.homing === true && e.vel && e.vel.isVector3){ const own = c.r, up2 = e.update; e.update = function(dt){ const T = own.brain && own.brain.target && !own.brain.target.ko ? own.brain.target : null;
+          if(T && this.pos && this.pos.isVector3){ const sp = this.vel.length() || 1, d = new THREE.Vector3().subVectors(T.parts.torso.p, this.pos).setLength(sp); this.vel.lerp(d, Math.min(1, dt*2.5)).setLength(sp); } return up2.call(this, dt); }; } } } }
+  return _varAdd(e);
+};
+// Schaden (und Rückstoß bei „Heavy“) des Besitzers während seiner Technik
+const _varHit = resolveHit;
+resolveHit = function(att, tgt, def, part, dir){
+  const c = VAR.cur, own = varOwner(att);
+  if(!c || VAR.prof || !own || own !== c.r){ if(c && VAR.prof && def && def.melee) varMark('m'); return _varHit(att, tgt, def, part, dir); }
+  const m = c.dmg || 1; att.dmgMul *= m; const hp0 = tgt ? tgt.hp : 0;
+  let out; try{ out = _varHit(att, tgt, def, part, dir); } finally { att.dmgMul /= m; }
+  if(tgt && tgt.hp < hp0 && !tgt.ko){
+    if(c.kb && dir && tgt.addVelocity){ const k = (c.kb - 1)*2.2; tgt.addVelocity({x:(dir.x || 0)*k, y:0.6, z:(dir.z || 0)*k}); }
+    if(c.twin && def && !def._varTwin){ const t2 = Object.assign({}, c, {twin:0, dmg:c.twin}), d2 = Object.create(def); d2._varTwin = true; d2.root = def.root || stDefId(def);
+      _varAfter(0.2, () => { if(alive(tgt) && alive(att) && hittable(tgt, def)) varRun(t2, () => resolveHit(att, tgt, d2, tgt.parts.torso, dir), null, []); }); }
+  }
+  return out;
+};
+// Flächen, Kegel, Linien, Markierungen
+const _varBlast = blastAt; blastAt = function(owner, x, y, z, R, def, opts){ varMark('a'); const c = VAR.cur; return _varBlast(owner, x, y, z, R*((c && !VAR.prof && c.radius) || 1), def, opts); };
+const _varCone = jxCone; jxCone = function(r, f, R, dot, def, extra){ varMark('c'); const c = VAR.cur, k = (c && !VAR.prof && c.radius) || 1; return _varCone(r, f, R*k, Math.max(-0.2, Math.min(0.95, dot - (k - 1)*0.25)), def, extra); };
+const _varLine = lineHits; lineHits = function(r, o, f, len, w, def, maxY){ varMark('l'); const c = VAR.cur, k = (c && !VAR.prof && c.radius) || 1; return _varLine(r, o, f, len*(k > 1 ? 1.25 : 1), w*k, def, maxY); };
+const _varTele = tele; tele = function(o){ varMark('a'); const c = VAR.cur; if(c && !VAR.prof && o){ o = Object.assign({}, o); if(c.radius){ if(o.R) o.R *= c.radius; if(o.line) o.line = Object.assign({}, o.line, {w:o.line.w*c.radius}); } if(c.tele && o.delay) o.delay *= c.tele; } return _varTele(o); };
+const _varShock = spawnShock; spawnShock = function(x, z, R, col){ const c = VAR.cur; return _varShock(x, z, R*((c && !VAR.prof && c.radius) || 1), col); };
+const _varAoe = detonateAoe; detonateAoe = function(att, def){ varMark('a'); const c = VAR.cur; if(!c || VAR.prof || !c.radius || !def.aoe) return _varAoe(att, def); const d2 = Object.create(def); d2.aoe = Object.assign({}, def.aoe, {radius:def.aoe.radius*c.radius}); d2.root = def.root || stDefId(def); return _varAoe(att, d2); };
+// Geschosse aus dem Pool (Kit-Techniken)
+const _varFire = fireProjectiles;
+fireProjectiles = function(att, def){
+  varMark('p'); const c = VAR.cur; if(!c || VAR.prof || !def.projectile) return _varFire(att, def);
+  const P = def.projectile, d2 = Object.create(def); d2.root = def.root || stDefId(def) || c.id;
+  const cnt = c.single ? Math.max(1, Math.ceil(P.count/2)) : Math.round(P.count*(c.count || 1)) + (c.count > 1 && P.count === 1 ? 0 : 0);
+  d2.projectile = Object.assign({}, P, {speed:P.speed*(c.speed || 1), radius:P.radius*(c.size || 1), count:Math.max(1, cnt), spread:(P.spread || 0.12)*(c.count > 1 ? 1.3 : 1)});
+  d2.dmg = (def.dmg || 0)*(c.dmg || 1);
+  const before = new Set(projPool.active); const out = _varFire(att, d2);
+  if(c.homing){ const T = (att.brain && att.brain.target && !att.brain.target.ko) ? att.brain.target : findFacingTarget(att, 16); for(const p of projPool.active) if(!before.has(p)){ p.vHome = T; p.vTurn = 2.6; } }
+  return out;
+};
+const _varProj = updateProjectiles;
+updateProjectiles = function(dt){
+  for(const p of projPool.active) if(p.vHome){ if(!alive(p.vHome) || p.reflected){ p.vHome = null; continue; } const tp = p.vHome.parts.torso.p, sp = p.vel.length() || 1; _v1.subVectors(tp, p.pos).setLength(sp); p.vel.lerp(_v1, Math.min(1, dt*p.vTurn)).setLength(sp); }
+  return _varProj(dt);
+};
+const _varRel = projPool.release.bind(projPool); projPool.release = function(p){ p.vHome = null; return _varRel(p); };
+// Fliegende Geschosse und Läufer (freie Techniken)
+const _VarJxBolt = JxBolt;
+JxBolt = class extends _VarJxBolt{
+  constructor(owner, o, dir, opt){
+    const c = VAR.cur, use = c && !VAR.prof && !opt._vclone;
+    if(use){ opt = Object.assign({}, opt); if(c.speed) opt.speed = (opt.speed || 16)*c.speed; if(c.size) opt.r = (opt.r || 0.6)*Math.max(1, c.size*0.9);
+      if(c.homing === true && !opt.homing){ const T = owner && (owner.brain && owner.brain.target && !owner.brain.target.ko ? owner.brain.target : findFacingTarget(owner, 18)); if(T){ opt.homing = T; opt.turn = 2.4; } }
+      if(c.homing === false && opt.homing){ opt.homing = null; } }
+    super(owner, o, dir, opt);
+    if(use){ if(c.size && c.size !== 1) this.g.scale.multiplyScalar(c.size);
+      const n = Math.round(c.count || 1); for(let k = 1; k < n; k++){ const a = (k % 2 ? 1 : -1)*Math.ceil(k/2)*0.22, d = dir.clone(); const ca = Math.cos(a), sa = Math.sin(a); const nd = new THREE.Vector3(d.x*ca - d.z*sa, d.y, d.z*ca + d.x*sa);
+        const op = Object.assign({}, opt, {_vclone:true, delay:(opt.delay || 0) + k*0.05}); try{ addEntity(new _VarJxBolt(owner, o.clone ? o.clone() : o, nd, op)); }catch(e){} } }
+  }
+};
+const _VarKxRunner = KxRunner;
+KxRunner = class extends _VarKxRunner{
+  constructor(owner, pos, opt){
+    const c = VAR.cur, use = c && !VAR.prof && !opt._vclone;
+    if(use){ opt = Object.assign({}, opt); if(c.speed) opt.speed = (opt.speed || 10)*c.speed; if(c.size) opt.r = (opt.r || 0.9)*Math.max(1, c.size*0.85); if(c.homing === false) opt.turn = 0; if(c.homing === true) opt.turn = Math.max(opt.turn || 0, 3); }
+    super(owner, pos, opt);
+    if(use){ if(c.size && c.size !== 1) this.g.scale.multiplyScalar(c.size);
+      const n = Math.round(c.count || 1); for(let k = 1; k < n; k++){ const f = this.dir, s = (k % 2 ? 1 : -1)*Math.ceil(k/2)*0.9, p2 = pos.clone().add(new THREE.Vector3(-f.z*s, 0, f.x*s));
+        try{ addEntity(new _VarKxRunner(owner, p2, Object.assign({}, opt, {_vclone:true, delay:(opt.delay || 0) + k*0.06}))); }catch(e){} } }
+  }
+};
+// Buffs
+const _varBuff = Ragdoll.prototype.addBuff;
+Ragdoll.prototype.addBuff = function(name, dur){
+  const c = VAR.cur; if(c && c.r === this) varMark('f');
+  if(c && !VAR.prof && c.r === this){ dur *= c.buff || 1;
+    if(c.share){ const a = ragdolls.filter(o => o !== this && o.team === this.team && !o.ko).sort((x, y) => hdist(x.core.p, this.core.p) - hdist(y.core.p, this.core.p))[0];
+      if(a && hdist(a.core.p, this.core.p) < 12){ _varBuff.call(a, name, dur*0.7); spawnSfx(a.parts.head.p, '共有', 'mint'); } } }
+  return _varBuff.call(this, name, dur);
+};
+// Domänen: geschlossen, offen (ganze Arena, keine Barriere, schwächer) oder komprimiert
+const _varDom = openDomain;
+openDomain = function(owner, theme, dur){
+  varMark('d'); const c = VAR.cur; const T = DOMAIN_THEMES[theme];
+  if(!c || VAR.prof || !c.dom || !T) return _varDom(owner, theme, dur);
+  const R0 = T.R; VAR.domMode = c.dom;
+  T.R = c.dom === 'open' ? Math.max(R0*2.4, MAP.id === 'bluelock' && typeof SSF !== 'undefined' ? Math.hypot(SSF.X, SSF.Z) + 1 : R0*2.4) : R0*0.65;
+  let d; try{ d = _varDom(owner, theme, c.dom === 'compact' ? dur*1.1 : dur); } finally { T.R = R0; VAR.domMode = null; }
+  if(d){ d.vMode = c.dom; if(c.dom === 'open'){ d.outer.visible = false; showBanner('OPEN DOMAIN', 'gold'); } else showBanner('COMPRESSED DOMAIN', 'crimson'); }
+  return d;
+};
+const _varDisable = Domain.prototype.disableMap; Domain.prototype.disableMap = function(){ if(VAR.domMode === 'open' || this.vMode === 'open') return; return _varDisable.call(this); };
+const _varDomUp = Domain.prototype.update;
+Domain.prototype.update = function(dt){ if(this.vMode !== 'open') return _varDomUp.call(this, dt);
+  // offen: keine Barriere – nur Laufzeit und Ausblenden
+  this.t += dt; if(!alive(this.owner) && this.dur > this.t + 0.6) this.dur = this.t + 0.6; const end = this.t > this.dur;
+  this.k = end ? Math.max(0, 1 - (this.t - this.dur)/0.5) : Math.min(1, 0.05 + this.t/0.6); for(const r of ragdolls) this.classify(r);
+  if(end && this.k <= 0){ this.finish(); return false; } return true; };
+/* ---------- Varianten sichtbar und wählbar ---------- */
+// Im Kampf: beim ersten Einsatz einer Technik kurz den Variantennamen zeigen
+const _varCast2 = Ragdoll.prototype.cast;
+Ragdoll.prototype.cast = function(id){ const ok = _varCast2.call(this, id);
+  if(ok && !VAR.prof && varPool().has(varRootId(id))){ this.cs.varShown = this.cs.varShown || {}; const root = varRootId(id); if(!this.cs.varShown[root]){ this.cs.varShown[root] = 1; const V = varInfo(root, varIndexFor(this, root)); spawnSfx(this.parts.head.p, V.n, 'gold'); bus.emit('log', `${this.name}: ${(ATTACKS[root] || {}).label || root} – variant ${V.n}`); } }
+  return ok; };
+function varHtml(p){ const ids = [...(p.moves || []), p.ult].filter(id => id && ATTACKS[id]);
+  return `<div class="var-box"><b>Technique variants</b>${ids.map(id => { const V = varInfo(id, varOfPlayer(p, id)); return `<div class="var-row"><span>${ssEsc(kdLabel(id))}</span><em>${ssEsc(V.n)}</em><small>${ssEsc(V.d)}</small></div>`; }).join('')}</div>`; }
+const _varKd = kdOpen;
+kdOpen = function(id, cmpId){ _varKd(id, cmpId); const p = SS.st && SS.st.players[id], h = document.querySelector('#kd-modal .kd-mh'); if(!p || !h) return;
+  const el = document.createElement('div'); el.innerHTML = varHtml(p); const anchor = document.querySelector('#kd-modal .st-traits') || h; anchor.after(el.firstChild); };
+// Character Creator: Variante je Technik wählen
+const _varCcRender = ccRender;
+ccRender = function(){ _varCcRender(); const d = CC.d, md = document.getElementById('cc-modal'); if(!d || !md) return; d.vars = d.vars || {};
+  const add = (sel, id) => { if(!sel || !id) return; if(d.vars[id] == null) d.vars[id] = varHash((d.name || '') + '|' + id) % 3; const s2 = document.createElement('select'); s2.className = 'var-sel'; s2.title = 'Variant: how this fighter performs the technique';
+    s2.innerHTML = varList(id).map((k, i) => `<option value="${i}"${d.vars[id] === i ? ' selected' : ''}>Variant: ${ssEsc(VAR_ARCH[k].n)} – ${ssEsc(VAR_ARCH[k].d)}</option>`).join('');
+    s2.onchange = () => { d.vars[id] = +s2.value; }; const host = sel.parentElement; (host.querySelector('.cc-mi') || sel).after(s2); };
+  md.querySelectorAll('select[data-mv]').forEach(sel => add(sel, d.moves[+sel.dataset.mv])); add(md.querySelector('#cc-ult'), d.ult); };
+const _varToSnap = ccToSnap; ccToSnap = function(d, old){ const s = _varToSnap(d, old); s.vars = Object.assign({}, (old && old.vars) || {}, d.vars || {}); return s; };
+const _varFromSnap = ccFromSnap; ccFromSnap = function(s){ const d = _varFromSnap(s); d.vars = Object.assign({}, s.vars || {}); return d; };
+const _varSnapS = snSnapshot; snSnapshot = function(st, p){ const s = _varSnapS(st, p); if(p.vars) s.vars = Object.assign({}, p.vars); return s; };
+const _varApply = snApply; snApply = function(st, p, s, regress){ _varApply(st, p, s, regress); if(s && s.vars) p.vars = Object.assign({}, s.vars); };
+(() => { const c = document.createElement('style'); c.textContent = `.var-box{margin:6px 0;padding:6px 8px;border:2px solid var(--ink,#121019);background:#fff;font-size:12px}.var-box>b{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:3px}
+.var-row{display:grid;grid-template-columns:minmax(90px,auto) auto 1fr;gap:6px;align-items:baseline;padding:2px 0;border-top:1px dashed #ccc}.var-row em{font-style:normal;font-weight:800;color:#b04aff}.var-row small{color:#666}
+.cc-m select.var-sel{margin-top:3px;font-size:11px;font-weight:600;border-color:#b04aff}`; document.head.appendChild(c); })();
+// Ultimates mit eigener Sequenz: Ereignisse der Sequenz laufen im Kontext der Technik
+const _varUlt = ultStart; ultStart = function(a, b, K){ const S = _varUlt(a, b, K); if(S && VAR.cur) S._vctx = VAR.cur; return S; };
+const _varStep = UltSeq.prototype.step; UltSeq.prototype.step = function(dt){ return this._vctx ? varRun(this._vctx, _varStep, this, [dt]) : _varStep.call(this, dt); };
+try{ Object.assign(window.__arena, {VAR, varList, varInfo, varCtx, varIndexFor, VAR_ARCH, varPool:() => [...varPool()], ultStep:(dt) => ultStep(dt), kdOpenV:(i) => kdOpen(i)}); }catch(e){}
 
 requestAnimationFrame(frame);
 } // startGame

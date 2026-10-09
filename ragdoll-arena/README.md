@@ -71,3 +71,18 @@ Traits are shown in the fighter view and in the creator.
 | INT | Domain Amplification · Cursed Corpse Brawlers · Cursed Word: Blast Away! · Space Manipulation: Ui Ui · Heart Catch · Auspicious Beasts: Kaichi · Cursed Word: Run! |
 
 Each technique has its own models and VFX, its own sound layers and its own mechanic (binding, teleporting, stealing CE, reflecting, sealing, delayed bombs, summons and so on). Each also has two upgrade levels, stars and a stat requirement, an element for Chemical Reactions, and an AI rating. Cost and cooldown come from the star balancing. Running tournaments pass every new technique to two suitable fighters.
+
+## Technique variants (v63)
+
+Every technique has **three variants**. Each fighter performs it in one of them. In the tournament the variant is saved with the fighter. In the Character Creator you choose it per technique.
+
+The variants come from a variant engine. While a technique runs, a context attaches to everything it creates (projectiles, summons, areas, beams, delayed effects, buffs, domains) and changes those building blocks:
+
+- **Projectiles:** Seeker (slow, homing) · Lance (fast, straight) · Volley (twice as many, weaker) · Colossus (one giant, slow and devastating)
+- **Summons:** Horde (summoned twice, smaller) · Colossus (one giant) · Swift Pack (much faster)
+- **Areas, cones, beams:** Wide · Focused · Aftershock (strikes a second time) · Snap (triggers almost instantly)
+- **Buffs:** Enduring (lasts longer) · Surge (short, heals on activation) · Shared (the nearest ally gets it too)
+- **Close combat and direct techniques:** Swift · Heavy · Twin Strike · Reckless (ultimates only)
+- **Domains:** Closed (classic barrier) · Open (no barrier, covers the whole arena, weaker) · Compressed (tiny barrier, brutal sure-hit)
+
+Which building blocks each technique uses was measured automatically (`VAR_USE`); the three variants per technique follow from that. Variants appear in the fighter view, in the creator, on the gacha soul flames, and once per fight above the fighter's head on first use.
