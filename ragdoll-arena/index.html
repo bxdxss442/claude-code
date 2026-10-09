@@ -21406,6 +21406,35 @@ kdOpen = function(id, cmpId){
   h.after(b);
 };
 
+
+/* ================= Sonderarenen an/aus (v58) ================= */
+// In den Turniereinstellungen lässt sich jede Sonder-Simulation einzeln (oder alle auf einmal) abschalten.
+// Abgeschaltete Heimarenen fallen auf die Blue-Lock-Arena zurück; die Verteilung selbst bleibt stabil,
+// sodass Wiedereinschalten dieselben Teams wieder in ihre Arena bringt. Gilt sofort für alle noch offenen Matches.
+const SA_OFF_KEY = 'ss-arenas-off';
+const SA_OFF = new Set((() => { try{ return JSON.parse(localStorage.getItem(SA_OFF_KEY) || '[]') || []; }catch(e){ return []; } })());
+const _saHomeOff = saHome;
+saHome = function(st, T){ const h = _saHomeOff(st, T); return SA_OFF.has(h) ? 'bluelock' : h; };
+function saOffChanged(){
+  try{ localStorage.setItem(SA_OFF_KEY, JSON.stringify([...SA_OFF])); }catch(e){}
+  const st = SS.st; if(st) for(const m of st.matches) if(m.status !== 'done' && m.status !== 'live' && m.arena !== 'ruin'){ m.arena = null; m.arenaHost = null; }
+  if(st) ssSave(); if(!document.getElementById('ss').hidden) ssRender();
+}
+(function(){
+  const ref = document.getElementById('ss-items'), opts = ref && ref.closest('.ss-opts'); if(!opts) return;
+  const keys = Object.keys(SS_ARENAS).filter(k => SA_META[k]);
+  const box = document.createElement('div'); box.className = 'sa-opt'; box.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center;width:100%';
+  box.innerHTML = `<label class="chk"><input type="checkbox" id="sa-all"> <b>Special arenas</b></label>` +
+    keys.map(k => `<label class="chk" title="${ssEsc(SA_META[k].sub || '')}"><input type="checkbox" data-sa="${k}"> ${SA_META[k].k} ${ssEsc(SA_META[k].name)}</label>`).join('') +
+    `<small class="hint">Off = those teams play in the Blue Lock arena. Applies to all matches not played yet.</small>`;
+  opts.appendChild(box);
+  const all = box.querySelector('#sa-all'), cbs = [...box.querySelectorAll('[data-sa]')];
+  const sync = () => { for(const c of cbs) c.checked = !SA_OFF.has(c.dataset.sa); const n = cbs.filter(c => c.checked).length; all.checked = n > 0; all.indeterminate = n > 0 && n < cbs.length; };
+  all.onchange = () => { for(const k of keys) all.checked ? SA_OFF.delete(k) : SA_OFF.add(k); sync(); saOffChanged(); };
+  for(const c of cbs) c.onchange = () => { c.checked ? SA_OFF.delete(c.dataset.sa) : SA_OFF.add(c.dataset.sa); sync(); saOffChanged(); };
+  sync();
+})();
+
 requestAnimationFrame(frame);
 } // startGame
 </script>
