@@ -143,3 +143,19 @@ Which building blocks each technique uses was measured automatically (`VAR_USE`)
     - Intermissions before wildcard matches multiply the chance by 1.8.
     - The reveal shows “WILDCARD AWAKENING” in gold.
   - The fighter detail view shows 🔥/🔒 for each technique.
+
+## Simulated fighters, New Gen 11, full teams awaken (v68)
+
+- **No more scripted elimination for lack of players.** The tournament director waits until **no fair match** (two waiting teams of the same size) is possible. Only then does it fill the smaller team with **simulated fighters**: blue holographic copies of players who were already eliminated (grid look, light-blue outline, “◇ SIM”), like the goalkeeper simulations in Blue Lock.
+  - **Handicap matches are gone.** If only one team is left, it is filled to a complete 5-player team and passes, so the steal phase always ends with perfect 5-player teams.
+  - In very small tournaments with too few eliminated players, the simulation copies another fighter (“Sim <Name>”).
+- **Simulations make way:** when a real player joins (steal, New Gen 11 star), they replace a simulation and the team does not grow.
+  - Simulations cannot be stolen or picked in Content Mode, and plot twists do not choose them.
+  - A team that has only simulations left dissolves. Simulations get no farewell scenes.
+- **Fairness:** simulations deal 84 % damage and charge CE at 70 %. In simulated matches they count with 90 % of their OVR.
+- **New Gen 11:** the guest-star twist now gives the star a different fighter's name, e.g. “New Gen 11 Shoyo Hinata”. After the match he joins that team **for good**, replacing a simulation if there is one.
+  - If the team is in the middle of a match, he waits until it is over.
+  - If the team is complete or gone, he joins the replacements.
+  - In Expert Mode he arrives with all his techniques.
+- **Expert Mode:** as soon as a team has 5 players, all of its members unlock **every technique slot** they own. Moves gated behind stat thresholds are not forced. This way early qualifiers are no worse off than late ones.
+- **Tested in simulation:** 70+ full tournaments with 16–125 fighters. Every final team had 5 players, no handicap matches occurred, nobody was in two teams, and no simulation was ever stolen.

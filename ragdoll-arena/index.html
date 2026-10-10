@@ -13522,6 +13522,20 @@ const SS_NAMES = ["Yoichi Ysagi", "Meguru Bachiro", "Hyoma Chigeri", "Rensuke Ku
 // Turnierphasen:  steal (bis 7 Teams bestanden) → final (KO-Baum der 7) → done (Sieger)
 
 const SS_TARGET = 7, SS_FULL = 5;
+// Simulierte Kämpfer (v68): ausgeschiedene Spieler als blaue Simulation, zählen nicht als echte Mitglieder
+const ssRealIds = (st, ids) => ids.filter(i => st.players[i] && !st.players[i].sim);
+function ssSimRelease(st, T, ids, why){
+  for(const i of ids){ const p = st.players[i]; if(!p || !p.sim) continue; T.members = T.members.filter(x => x !== i);
+    p.sim = false; p.simTeam = null; p.status = p.clone ? 'gone' : 'eliminated'; p.team = null; p.hist.push(`Simulation for ${T.name} ends (${why})`); }
+}
+// Ein neues echtes Mitglied ersetzt einen simulierten Kämpfer (das Team wächst dadurch nicht)
+function ssSimMakeRoom(st, T, m){
+  const sims = T.members.filter(i => st.players[i] && st.players[i].sim); if(!sims.length) return null;
+  const out = sims.sort((a, b) => st.players[a].ovr - st.players[b].ovr)[0];
+  ssSimRelease(st, T, [out], 'replaced by a real player');
+  const txt = `The simulation of ${st.players[out].name} in ${T.name} is replaced`; if(m && m.notes) m.notes.push(txt); ssLog(st, txt);
+  return out;
+}
 // Turnierplan nach Spielerzahl. Mathematik: Ein Match verschiebt nur einen Spieler; ein Team löst sich auf, wenn ihm ein
 // Spieler bleibt – dabei scheidet genau EINER aus. Daher gilt immer: bestandene Teams = (Spieler − Teams) / 4.
 // Wir wählen die Teamzahl so, dass das eine Zweierpotenz ergibt (perfekter K.-o.-Baum ohne Freilos) und nie ein Team
@@ -13814,13 +13828,13 @@ function ssResolve(st, m, result, how = 'sim'){
   if(m.kind === 'ko') return ssResolveKo(st, m, W, L);
 
   const ch = ssChoose(st, W, L, m), pk = st.players[ch.pick];
-  L.members = L.members.filter(i => i !== ch.pick); W.members.push(ch.pick);
+  L.members = L.members.filter(i => i !== ch.pick); W.members.push(ch.pick); ssSimMakeRoom(st, W, m);
   pk.team = W.id; pk.stolen++; pk.hist.push(`#${m.no}: von ${W.name} aus ${L.name} geholt`);
   m.steal = {captain:ch.captain, pick:ch.pick, from:L.id, to:W.id, why:ch.why, lines:[]};
   m.notes.push(`${W.name} picks ${pk.name} (${ch.why.join(', ')})`);
-  if(m.allin) while(W.members.length < SS_FULL && L.members.length > 1){
+  if(m.allin) while(W.members.length < SS_FULL && ssRealIds(st, L.members).length > 1){
     const c2 = ssChoose(st, W, L, m), p2 = st.players[c2.pick];
-    L.members = L.members.filter(i => i !== c2.pick); W.members.push(c2.pick); p2.team = W.id; p2.stolen++; p2.hist.push(`#${m.no}: picked up in ${W.name}'s all-or-nothing duel`);
+    L.members = L.members.filter(i => i !== c2.pick); W.members.push(c2.pick); ssSimMakeRoom(st, W, m); p2.team = W.id; p2.stolen++; p2.hist.push(`#${m.no}: picked up in ${W.name}'s all-or-nothing duel`);
     m.notes.push(`All or nothing: ${W.name} also takes ${p2.name}`);
   }
   // Sieger
@@ -13830,7 +13844,8 @@ function ssResolve(st, m, result, how = 'sim'){
     m.notes.push(`${W.name} has 5 players – PASSED (${st.qualified.length}/${ssTarget(st)})`);
     ssLog(st, `${W.name} passes the Second Selection as team no. ${st.qualified.length}`);
   } else { W.status = 'waiting'; W.waitSince = st.seq; m.notes.push(`${W.name} rises to ${ssStageName(W.members.length)}`); }
-  // Verlierer
+  // Verlierer (simulierte Kämpfer zählen nicht: bleibt nur ein echter übrig, löst sich das Team auf)
+  if(ssRealIds(st, L.members).length <= 1) ssSimRelease(st, L, L.members.filter(i => st.players[i].sim), 'team dissolved');
   const left = [...L.members];
   if(L.members.length <= 1){
     L.status = 'dissolved';
@@ -13853,6 +13868,7 @@ function ssEndSteal(st, why){
   for(const m of st.matches) if(m.kind === 'steal' && (m.status === 'pending' || m.status === 'live')){ m.status = 'cancelled'; m.notes.push('Cancelled – the steal phase is over'); }
   st.cut = [];
   for(const T of st.teams) if(T.status === 'waiting' || T.status === 'scheduled'){
+    ssSimRelease(st, T, T.members.filter(i => st.players[i].sim), 'final cut');
     T.status = 'out';
     for(const i of T.members){ const p = st.players[i]; p.status = 'eliminated'; st.cut.push(i); p.hist.push('Final cut – the steal phase is over, ELIMINATED');
       const mates = T.members.filter(x => x !== i); p.fw = ssFarewell(st, p, {how:'cut', stage:T.members.length, partner:mates.length ? st.players[mates[Math.floor(ssR(st)*mates.length)]] : null, team:T.name}); }
@@ -18230,7 +18246,7 @@ endBattle = function(w){
 };
 
 /* ---------------- Oberfläche ---------------- */
-SS_STATUS.honor = 'Duel of Honor'; if(!SS_STATUS.wildcard) SS_STATUS.wildcard = 'Wildcard';
+SS_STATUS.honor = 'Duel of Honor'; SS_STATUS.gone = 'Simulation ended'; SS_STATUS.joining = 'Joining'; if(!SS_STATUS.wildcard) SS_STATUS.wildcard = 'Wildcard';
 function twBadges(p){
   const b = [];
   if(p.cursed) b.push('呪 Curse'); if(p.flow) b.push('覚醒 Flow'); if(p.traitor) b.push('裏切 Traitor'); if(p.vow && p.vow.on) b.push('縛り Vow active'); if(p.vowBroken) b.push('縛り Vow broken');
@@ -21820,7 +21836,7 @@ function cmPickOpen(id){
   const st = SS.st, m = st.matches[id]; if(!m || m.status !== 'await') return;
   if(!m.cmChained){ m.cmChained = true; ssSave(); cmPlayList([scCmChains(m)], () => { ssToLobby(); cmPickOpen(id); }); return; }
   const {W, L} = cmSides(st, m), P = (i) => st.players[i], A = m.cmAwait;
-  const sealed = (i) => (P(i).sealed || 0) > 0, free = L.members.filter(i => !sealed(i)), pickable = (i) => !sealed(i) || !free.length;
+  const sealed = (i) => (P(i).sealed || 0) > 0 || !!P(i).sim, free = L.members.filter(i => !sealed(i)), pickable = (i) => !sealed(i) || !free.length;   // Simulationen sind nicht wählbar
   let sel = null;
   const md = $('cm-pick'); md.hidden = false;
   const stat = (k, v) => `<span class="cm-sb"><i>${k}</i><b style="width:${Math.max(4, Math.min(100, v))}%"></b><em>${v}</em></span>`;
@@ -24085,6 +24101,169 @@ kdOpen = function(id, cmpId){ _xpKd(id, cmpId); try{ if(!xpOn()) return; const p
 (function(){ const c = document.createElement('style'); c.textContent = `.xp-box{margin:6px 0;padding:6px 8px;border:2px solid #121019;background:#f3edff;font:12px var(--f-body,system-ui);display:flex;flex-wrap:wrap;gap:5px;align-items:center}
 .xp-box b{font-weight:800;margin-right:4px}.xp-t{padding:1px 6px;border:1.5px solid #8a80a8;color:#6c6585;background:#fff}.xp-t.on{border-color:#7a3cff;color:#121019;background:#e4d6ff}`; document.head.appendChild(c); })();
 try{ Object.assign(window.__arena, {newTourney:(n) => { SS.count = ssNearestCount(n, Math.min(SS_MAX_PLAYERS, SS_NAMES.length)); ssNewTournament(false); }, xpPace, xpChance, scenesFor:(m, w, b) => ssScenesFor(m, w, b), sscState:() => ({i:SSC.cur && SSC.cur.i, t:SSC.cur && +SSC.cur.t.toFixed(2), name:SSC.cur && SSC.cur.scene.name, active:SS.active, paused:ctx.paused, cm:typeof CM !== 'undefined' && CM.paused, hooks:!!(modeHooks.frame)}), ssSimN:(n) => ssSimN(n), cmPlayList, legoBreak:(...a) => legoBreak(...a), legoRepair, xpSet, xpOf, xpOrder, xpUnlock, scXpReveal, xpPendingScenes, XP}); }catch(e){}
+
+/* ============================ game/ Simulierte Kämpfer & New Gen XI (v68) ============================ */
+// Statt Teams per Regel rausfliegen zu lassen, wenn kein faires Match mehr möglich ist, füllt die Turnierleitung kleinere Teams mit
+// SIMULIERTEN Kämpfern auf – Kopien ausgeschiedener Spieler, blau und holografisch wie die Torhüter-Simulationen aus Blue Lock.
+//  · Erst wenn wirklich kein faires Match (gleich große Teams) mehr möglich ist.
+//  · Bleibt nur ein Team übrig, wird es zu einem vollständigen 5er-Team aufgefüllt – am Ende stehen immer perfekte 5er-Teams.
+//  · Tritt ein echter Spieler bei (Steal, Gaststar …), ersetzt er eine Simulation.
+//  · Simulationen machen weniger Schaden und laden langsamer CE auf; in der Simulation zählen sie schwächer.
+const SIM = {dmg:0.84, ce:0.7, ovr:0.9, col:'#3d8bff', edge:'#8fe9ff'};
+const ssIsSim = (st, i) => !!(st.players[i] && st.players[i].sim);
+function ssSimPool(st){ return st.players.filter(p => p.status === 'eliminated' && !p.sim && !p.clone && !p.injured && !p.refused); }
+function ssSimAdd(st, T, n, why){
+  const added = [];
+  for(let k = 0; k < n; k++){
+    const avg = ssAvg(st, ssRealIds(st, T.members).length ? ssRealIds(st, T.members) : T.members);
+    let pool = ssSimPool(st), p;
+    if(pool.length) p = pool.sort((a, b) => Math.abs(a.ovr - avg) - Math.abs(b.ovr - avg) + (ssR(st) - 0.5)*6)[0];
+    else {   // zu wenige Ausgeschiedene (kleine Turniere): die Simulation kopiert einen anderen Kämpfer
+      const src = st.players.filter(q => !q.sim && !q.clone && q.team !== T.id && !q.newGen).sort((a, b) => Math.abs(a.ovr - avg) - Math.abs(b.ovr - avg) + (ssR(st) - 0.5)*6)[0]; if(!src) break;
+      p = JSON.parse(JSON.stringify(src)); Object.assign(p, {id:st.players.length, orig:src.orig, name:`Sim ${src.name}`, clone:true, simOf:src.id, team:null, status:'eliminated', wins:0, losses:0, kos:0, stolen:0, hist:[`Simulated copy of ${src.name}`], fw:null, xpU:src.xpU ? src.xpU.slice() : undefined, skin:null});
+      st.players.push(p);
+    }
+    p.sim = true; p.simTeam = T.id; p.status = 'active'; p.team = T.id; T.members.push(p.id); added.push(p.id);
+    p.hist.push(`Returns as a SIMULATION for ${T.name} (${why})`);
+  }
+  if(added.length) ssLog(st, `SIMULATION: ${added.map(i => st.players[i].name).join(', ')} ${added.length > 1 ? 'are' : 'is'} simulated for ${T.name} (${why})`);
+  return added;
+}
+function ssQualify(st, T, why){
+  T.status = 'qualified'; st.qualified.push(T.id); T.qualNo = st.qualified.length;
+  for(const i of T.members){ const p = st.players[i]; if(!p.sim) p.status = 'qualified'; p.hist.push(`passed the Second Selection with ${T.name} (${why})`); }
+  ssLog(st, `${T.name} passes the Second Selection as team no. ${st.qualified.length} (${why})`);
+  xpTeamFull(st, T);
+}
+// Vor der normalen Planung: gibt es kein faires Match mehr, werden Simulationen eingesetzt
+function ssSimFill(st){
+  if(st.phase !== 'steal') return false;
+  if(st.matches.some(m => (m.kind === 'steal' || m.kind === 'hd') && (m.status === 'pending' || m.status === 'live'))) return false;
+  if(st.reserves.length >= 2) return false;   // Nachrücker bilden zuerst ein echtes Team
+  const W = st.teams.filter(t => t.status === 'waiting' && t.members.length > 0), slots = ssTarget(st) - st.qualified.length;
+  if(slots <= 0) return false;
+  const ok = (n) => n < 4 || slots > 0, cnt = {}; for(const T of W) cnt[T.members.length] = (cnt[T.members.length] || 0) + 1;
+  if(Object.entries(cnt).some(([n, c]) => c >= 2 && ok(+n))) return false;   // es gibt noch ein faires Match
+  if(W.length >= 2){
+    const L = W.slice().sort((a, b) => b.members.length - a.members.length || a.waitSince - b.waitSince);
+    let bi = -1, bd = Infinity;
+    for(let i = 0; i < L.length - 1; i++){ const d = L[i].members.length - L[i + 1].members.length; if(ok(L[i].members.length) && d < bd){ bd = d; bi = i; } }
+    if(bi < 0) return false;
+    const big = L[bi], small = L[bi + 1], add = ssSimAdd(st, small, big.members.length - small.members.length, `so that ${small.name} can face ${big.name} fairly`);
+    return add.length > 0 && small.members.length === big.members.length;
+  }
+  if(W.length === 1){
+    const T = W[0], add = ssSimAdd(st, T, SS_FULL - T.members.length, 'no opponents left – completed to a full team');
+    if(T.members.length >= SS_FULL){ ssQualify(st, T, 'completed with simulations'); return true; }
+  }
+  return false;
+}
+const _simSchedule = ssSchedule;
+ssSchedule = function(st){ try{ ngPendingJoin(st); ssSimFill(st); }catch(e){ console.warn('Simulation fill', e); } return _simSchedule.apply(this, arguments); };
+// New Gen 11 wartet, bis sein Team aus dem laufenden Match zurück ist
+function ngPendingJoin(st){
+  // Teams ohne echte Mitglieder (z. B. nach Plot Twists) lösen sich auf – Simulationen spielen nie allein
+  for(const T of st.teams){ if(!['waiting'].includes(T.status) || !T.members.length || ssRealIds(st, T.members).length) continue;
+    ssSimRelease(st, T, T.members.slice(), 'no real players left'); T.status = 'dissolved'; T.members = []; ssLog(st, `${T.name} dissolves – only simulations were left`); }
+  for(const p of st.players){ if(p.status !== 'joining') continue; const tm = st.teams[p.ngTeam];
+    if(!tm || ['dissolved', 'out'].includes(tm.status) || st.phase !== 'steal'){ p.status = 'reserve'; st.reserves.push(p.id); p.hist.push('his team is gone – joins the replacements'); continue; }
+    if(tm.status === 'scheduled') continue;
+    if(ssSimMakeRoom(st, tm, null) === null && (tm.status === 'qualified' || tm.members.length >= SS_FULL)){ p.status = 'reserve'; st.reserves.push(p.id); p.hist.push(`${tm.name} is complete – joins the replacements`); continue; }
+    tm.members.push(p.id); p.team = tm.id; p.status = tm.status === 'qualified' ? 'qualified' : 'active'; p.hist.push(`joins ${tm.name} permanently`); ssLog(st, `${p.name} joins ${tm.name} permanently`);
+    if(tm.status === 'waiting' && tm.members.length >= SS_FULL){ ssQualify(st, tm, 'the New Gen 11 star completes the team'); if(st.qualified.length >= ssTarget(st)) ssEndSteal(st, `${ssTarget(st)} teams have passed`); } }
+}
+// Steal: Simulationen können nicht gewählt werden
+const _simChoose = ssChoose;
+ssChoose = function(st, W, L, m){
+  const save = L.members, real = ssRealIds(st, L.members);
+  if(real.length && real.length < L.members.length) L.members = real;
+  try{ const c = _simChoose(st, W, L, m); if(m && c && st.players[c.pick] && st.players[c.pick].sim) m.simPicked = true; return c; } finally { L.members = save; }
+};
+// Plot Twists greifen nicht auf Simulationen zu
+const _simPrefer = twPrefer;
+twPrefer = function(st, ids, egos){ const r = ssRealIds(st, ids); return _simPrefer(st, r.length ? r : ids, egos); };
+// Simulierte Matches: Simulationen sind etwas schwächer
+const _simSimulate = ssSimulate;
+ssSimulate = function(st, m){
+  const ids = [...(m.ra || []), ...(m.rb || [])].filter(i => ssIsSim(st, i)); if(!ids.length) return _simSimulate.apply(this, arguments);
+  const old = ids.map(i => st.players[i].ovr); ids.forEach(i => { st.players[i].ovr = Math.round(st.players[i].ovr*SIM.ovr); });
+  try{ return _simSimulate.apply(this, arguments); } finally { ids.forEach((i, k) => { st.players[i].ovr = old[k]; }); }
+};
+// ---- Aussehen: blaue Hologramm-Simulation ----
+let simTex = null;
+function simGrid(){ if(simTex) return simTex; const cv = document.createElement('canvas'); cv.width = cv.height = 64; const c = cv.getContext('2d');
+  c.fillStyle = '#ffffff'; c.fillRect(0, 0, 64, 64); c.fillStyle = '#9fc8ff'; for(let i = 0; i < 64; i += 16){ c.fillRect(i, 0, 2, 64); c.fillRect(0, i, 64, 2); }
+  simTex = new THREE.CanvasTexture(cv); simTex.wrapS = simTex.wrapT = THREE.RepeatWrapping; simTex.repeat.set(2, 2); simTex.colorSpace = THREE.SRGBColorSpace; return simTex; }
+const simMat = (() => { let m = null; return () => m || (m = new THREE.MeshLambertMaterial({color:SIM.col, emissive:'#0d2f8a', emissiveIntensity:0.9, map:simGrid(), transparent:true, opacity:0.86})); })();
+const _simKit = ssKit;
+ssKit = function(f, team){ const key = _simKit(f, team); if(f && f.sim){ const K = CHARACTERS[key]; K.skin = null; K.extras = []; K.name = f.name;
+    K.look = Object.assign({}, K.look, {jacket:SIM.col, sleeve:SIM.col, pants:'#2a63d6', boots:'#1d47a8', skin:'#6fb0ff', hair:'#bfe6ff', accent:SIM.edge, eyes:'#e8fbff'}); } return key; };
+function simDress(r){
+  if(!r || r.simDressed) return; r.simDressed = true; r.isSim = true;
+  const M = simMat();
+  for(const p of r.partList) p.group.traverse(o => { if(!o.isMesh || o.userData.outline || o.isSprite) return; if(o.userData.mat0) o.userData.mat0 = M; o.material = M; });
+  const ac = r.auraColor ? r.auraColor.bind(r) : () => null; r.auraColor = () => ac() || SIM.edge;
+  r.applyLook();
+}
+function simCheck(r){
+  if(!r || r.simChecked || r.ssId == null || !SS.st || !SS.st.players[r.ssId]) return; r.simChecked = true;
+  if(!SS.st.players[r.ssId].sim) return;
+  simDress(r);
+  if(!r.simNerf && SS.live){ r.simNerf = true; r.dmgMul *= SIM.dmg; r.simCe = r.ce; }
+  const el = typeof overheads !== 'undefined' && overheads.get(r); if(el){ const nm = el.querySelector('.nm'); if(nm) nm.textContent = `◇ SIM · ${SS.st.players[r.ssId].name}`; }
+}
+const _simActor = scActor;
+scActor = function(f, x, z, yaw, team){ const r = _simActor(f, x, z, yaw, team); try{ simCheck(r); }catch(e){} return r; };
+const _simPhys = physicsStep;
+physicsStep = function(){
+  _simPhys();
+  if(!SS.active) return;
+  for(const r of ragdolls){ if(!r.simChecked) simCheck(r);
+    if(r.simNerf){ const d = r.ce - (r.simCe ?? r.ce); if(d > 0) r.ce = (r.simCe ?? r.ce) + d*SIM.ce; r.simCe = r.ce; }   // langsamere CE-Aufladung
+    if(r.isSim && !r.ko && Math.random() < 0.06){ const t = r.parts.torso.p; emitParticles(t.x + (Math.random() - 0.5)*0.4, t.y + (Math.random() - 0.3)*0.9, t.z + (Math.random() - 0.5)*0.4, 1, {speed:0.1, up:0.6, color:SIM.edge, size:0.06, life:0.4, gravity:-1, drag:3}); } }
+};
+// ---- Expert Mode: fertige 5er-Teams erwecken alle ihre Technik-Slots ----
+function xpTeamFull(st, T){
+  if(!st.xp) return; const done = [];
+  for(const i of T.members){ const p = st.players[i]; if(!p || p.sim) continue; const all = xpOrder(p), U = xpOf(p); if(U.length >= all.length) continue; p.xpU = all.slice(); done.push(p.name); }
+  if(done.length) ssLog(st, `🔥 ${T.name} is complete – all soul flames awaken (${done.join(', ')})`);
+}
+const _simResolve = ssResolve;
+ssResolve = function(st, m, result, how){
+  const before = new Set(st.qualified || []), out = _simResolve.apply(this, arguments);
+  try{ for(const id of st.qualified || []) if(!before.has(id)) xpTeamFull(st, st.teams[id]); }catch(e){}
+  return out;
+};
+// ---- New Gen XI: der Gaststar trägt den Namen eines anderen Kämpfers und bleibt dauerhaft ----
+function ngName(st){
+  const used = new Set(st.players.map(p => p.orig || p.name));
+  const pool = (typeof SS_NAMES !== 'undefined' ? SS_NAMES : []).filter(n => !used.has(n));
+  const src = pool.length ? pool : st.players.filter(p => !p.sim).map(p => p.orig || p.name);
+  return `New Gen 11 ${src[Math.floor(ssR(st)*src.length)] || TW_GUESTS[0]}`;
+}
+const _ngArm = twArm;
+twArm = function(st, m){ const T0 = st.tw && st.tw.state; _ngArm(st, m); const T = st.tw;
+  if(T && T.id === 'guest' && T.state === 'armed' && T0 !== 'armed' && T.d.guest && !T.d.guest.ng){ T.d.guest.name = ngName(st); T.d.guest.ng = true; } };
+function ngJoin(st, m){
+  const T = st.tw, d = T && T.d; if(!d || !d.guest || d.joined) return; d.joined = true;
+  const G = d.guest, tm = st.teams[d.side === 'a' ? m.a : m.b];
+  const p = Object.assign({}, G, {id:st.players.length, orig:G.name, name:G.name, team:null, status:'active', wins:0, losses:0, kos:0, stolen:0, hist:[`#${m.no}: appears as guest star from the New Gen XI`], newGen:true});
+  delete p.ng; st.players.push(p);
+  if(st.xp) p.xpU = xpOrder(p);
+  if(tm && (tm.status === 'waiting' || tm.status === 'scheduled' || tm.status === 'qualified')){
+    const out = ssSimMakeRoom(st, tm, m); const grew = out === null;
+    const full = grew && tm.members.length + 1 >= SS_FULL;
+    if(grew && full && tm.status === 'scheduled' && st.phase === 'steal'){ p.status = 'joining'; p.ngTeam = tm.id; p.hist.push(`waits for ${tm.name}'s next match to end, then joins`); }
+    else if(grew && (tm.status === 'qualified' || (full && (tm.status !== 'waiting' || st.phase !== 'steal')))){ st.reserves.push(p.id); p.status = 'reserve'; p.hist.push(`${tm.name} has no free slot right now – joins the replacements`); }
+    else { tm.members.push(p.id); p.team = tm.id; if(tm.status === 'qualified') p.status = 'qualified'; p.hist.push(`joins ${tm.name} permanently`);
+      if(full){ ssQualify(st, tm, 'the New Gen 11 star completes the team'); if(st.qualified.length >= ssTarget(st)) ssEndSteal(st, `${ssTarget(st)} teams have passed`); } }
+  } else { st.reserves.push(p.id); p.status = 'reserve'; p.hist.push('his team is gone – joins the replacements'); }
+  ssLog(st, `${p.name} stays in the tournament for good${p.team != null ? ` – with ${st.teams[p.team].name}` : ''}`);
+  if(SS.st === st) try{ ssSkinOf(p); }catch(e){}
+}
+const _ngFinal = twFinalizeMatch;
+twFinalizeMatch = function(st, m){ const T = st.tw, isG = T && T.id === 'guest'; _ngFinal(st, m); if(isG) try{ ngJoin(st, m); }catch(e){ console.warn('New Gen', e); } };
+try{ Object.assign(window.__arena, {ssSimFill, ssSimAdd, simCheck, ngName, ngJoin, SIM}); }catch(e){}
 requestAnimationFrame(frame);
 } // startGame
 </script>
