@@ -16511,6 +16511,19 @@ function ssRxLive(o, A, B, T, team){
 }
 
 /* ---------- VFX-Baukasten für die Impact-Cutscenes ---------- */
+// Shikigami der Zehn Schatten für die Beast Stampede (v69): Hund, Hase, Ochse, Hirsch, Nue, Max Elephant
+function stShiki(kind){
+  let g;
+  if(kind === 'dog') g = kxWolf(); else if(kind === 'ox') g = kxOx(); else if(kind === 'deer') g = kxDeer(); else if(kind === 'elephant') g = kxElephant();
+  else if(kind === 'nue'){ g = jjBird(); g.scale.setScalar(1.6); }
+  else { g = makeRabbit(); scene.remove(g); g.scale.setScalar(3.4); }
+  if(!g.userData.legs) g.userData.legs = [];
+  if(kind === 'ox' || kind === 'deer' || kind === 'elephant') g.traverse(o => { if(o.isMesh && o.geometry === GEO.cyl && o.position.y < (kind === 'elephant' ? 1.5 : 1)) g.userData.legs.push(o); });
+  scene.add(g); return g;
+}
+const stBaseY = (kind) => kind === 'rabbit' ? 0.55 : 0;
+function stRunLegs(g, ph){ (g.userData.legs || []).forEach((l, i) => { l.rotation.x = Math.sin(ph + (i % 2 ? Math.PI : 0) + (i > 1 ? Math.PI/2 : 0))*0.7; }); }
+function stFlap(g, ph){ g.traverse(o => { if(o.userData && o.userData.wing) o.rotation.z = Math.sin(ph)*0.6*o.userData.wing; }); }
 const vMesh = (geo, col, op = 0.9, add = true) => { const m = new THREE.Mesh(geo, add ? glowMat(col, op) : new THREE.MeshBasicMaterial({color:col, transparent:true, opacity:op, depthWrite:false, side:THREE.DoubleSide})); m.renderOrder = 7; scene.add(m); return m; };
 const vEase = (k) => 1 - Math.pow(1 - Math.min(1, Math.max(0, k)), 3);
 function vRing(p, col, r0, r1, dur, o = {}){ const m = vMesh(new THREE.TorusGeometry(1, o.th || 0.05, 6, 56), col, o.op ?? 0.95); m.position.copy(p); m.rotation.set(o.rx ?? Math.PI/2, o.ry || 0, o.rz || 0); m.visible = false; const dl = o.delay || 0;
@@ -16726,14 +16739,27 @@ const SS_RXC = {
   ]},
   stampede:{mul:1.6, shots:(D) => [
     {d:1.2, enter(D){ D.A.ssPose = 'scream'; vAura(D.A, '#5dff9b', 1.2, {n:5}); vRing(ssHead(D.A).clone(), '#5dff9b', 0.3, 7, 0.8, {rx:0, ry:D.A.yaw}); ssS('roar', {gain:1}); }, cam:(D, k) => cFront(D.A, 1.8, 0.4, 0, 38)},
-    {d:1.2, enter(D){ D.B.ssPose = 'point'; vAura(D.B, '#5dff9b', 1.2, {n:5}); const f = V3(D.tp.x - D.B.core.p.x, 0, D.tp.z - D.B.core.p.z).normalize(); D.dir = f; D.beasts = [];
-        for(let i = 0; i < 14; i++){ const b = vMesh(new THREE.SphereGeometry(0.6, 14, 10), '#5dff9b', 0.75); b.scale.set(1, 0.8, 2.1); const s = V3(-f.z, 0, f.x), off = (i % 7 - 3)*1.1, back = -6 - Math.floor(i/7)*2.5; b.position.copy(D.B.core.p).addScaledVector(f, back).addScaledVector(s, off).setY(-1); b.userData = {off, back}; D.beasts.push(b); }
-        fxAdd({dur:4.4, update(){}, dispose(){ fxKill(...D.beasts); }}); ssS('rumble', {gain:0.9}); },
-      tick(D, k){ for(const b of D.beasts) b.position.y = Math.min(0.8, -1 + k*3); }, cam:(D, k) => cOrbit(D.B.core.p, 7, 1.2, D.ab + 0.8, 56, 1)},
-    {d:1.3, enter(D){ D.run = 0; }, tick(D, k, dt){ D.run += dt; const f = D.dir, s = V3(-f.z, 0, f.x); for(const b of D.beasts){ const p = D.B.core.p.clone().addScaledVector(f, b.userData.back + D.run*22).addScaledVector(s, b.userData.off); b.position.set(p.x, 0.8 + Math.abs(Math.sin(D.run*14 + b.userData.off))*0.4, p.z); b.rotation.y = Math.atan2(f.x, f.z); emitParticles(p.x, 0.2, p.z, 1, {speed:1, up:1.5, color:'#9a8a6a', size:0.6, life:0.5, gravity:0}); }
+    {d:1.2, enter(D){ D.B.ssPose = 'point'; vAura(D.B, '#5dff9b', 1.2, {n:5}); const f = V3(D.tp.x - D.B.core.p.x, 0, D.tp.z - D.B.core.p.z).normalize(); D.dir = f; D.beasts = []; D.pud = [];
+        // Shikigami der Zehn Schatten brechen aus Schattenpfützen hervor
+        const kinds = ['dog', 'rabbit', 'ox', 'rabbit', 'dog', 'deer', 'rabbit', 'dog', 'rabbit', 'deer', 'rabbit', 'ox', 'rabbit', 'dog'];
+        kinds.forEach((kind, i) => { const g = stShiki(kind), s = V3(-f.z, 0, f.x), off = (i % 7 - 3)*1.6 + (Math.random() - 0.5)*0.4, back = -6 - Math.floor(i/7)*3 - Math.random()*0.8;
+          const base = D.B.core.p.clone().addScaledVector(f, back).addScaledVector(s, off); g.position.set(base.x, -2.4, base.z); g.rotation.y = Math.atan2(f.x, f.z); g.userData.off = off; g.userData.back = back; g.userData.kind = kind; g.userData.ph = Math.random()*6.28;
+          const pd = vMesh(new THREE.CircleGeometry(kind === 'ox' ? 1.4 : kind === 'rabbit' ? 0.6 : 1.1, 20), '#05030a', 0.92, false); pd.rotation.x = -Math.PI/2; pd.position.set(base.x, 0.03, base.z); D.pud.push(pd); D.beasts.push(g); });
+        for(const sgn of [-1, 1]){ const g = stShiki('nue'), s = V3(-f.z, 0, f.x), base = D.B.core.p.clone().addScaledVector(f, -4).addScaledVector(s, sgn*3.5); g.position.set(base.x, 6, base.z); g.rotation.y = Math.atan2(f.x, f.z); g.userData.off = sgn*3.5; g.userData.back = -4; g.userData.kind = 'nue'; g.userData.ph = sgn; D.beasts.push(g); }
+        fxAdd({dur:4.4, update(){}, dispose(){ for(const g of D.beasts) scene.remove(g); fxKill(...D.pud); }}); ssS('rumble', {gain:0.9}); ssS('roar', {gain:0.6}); },
+      tick(D, k){ for(const g of D.beasts){ const U = g.userData; if(U.kind === 'nue'){ g.position.y = 6 - k*2.5; stFlap(g, k*30); continue; } g.position.y = Math.min(stBaseY(U.kind), -2.4 + k*3.4);
+          if(Math.random() < 0.15) emitParticles(g.position.x, 0.2, g.position.z, 1, {speed:0.6, up:1.6, color:'#12081e', size:0.5, life:0.6, gravity:0}); }
+        for(const pd of D.pud) pd.material.opacity = 0.92*(1 - Math.max(0, k - 0.7)/0.3); }, cam:(D, k) => cOrbit(D.B.core.p, 7, 1.2, D.ab + 0.8, 56, 1)},
+    {d:1.3, enter(D){ D.run = 0; }, tick(D, k, dt){ D.run += dt; const f = D.dir, s = V3(-f.z, 0, f.x); for(const g of D.beasts){ const U = g.userData, sp = U.kind === 'rabbit' ? 24 : U.kind === 'ox' ? 19 : 22, p = D.B.core.p.clone().addScaledVector(f, U.back + D.run*sp).addScaledVector(s, U.off);
+          if(U.kind === 'nue'){ g.position.set(p.x, 3.4 + Math.sin(D.run*6 + U.ph)*0.4, p.z); stFlap(g, D.run*24 + U.ph); continue; }
+          const hop = U.kind === 'rabbit' ? Math.abs(Math.sin(D.run*16 + U.ph))*1.1 : Math.abs(Math.sin(D.run*14 + U.ph))*0.25; g.position.set(p.x, stBaseY(U.kind) + hop, p.z); g.rotation.x = U.kind === 'rabbit' ? -Math.cos(D.run*16 + U.ph)*0.25 : 0; stRunLegs(g, D.run*16 + U.ph);
+          if(Math.random() < 0.6) emitParticles(p.x, 0.2, p.z, 1, {speed:1, up:1.5, color:'#9a8a6a', size:0.6, life:0.5, gravity:0}); }
         shake = Math.max(shake, 0.3); if(D.run > 0.5 && !D.toss){ D.toss = 1; for(const e of D.V){ e.frozenT = 0; e.applyLook(); e.addVelocity({x:f.x*6, y:9, z:f.z*6}); } ssS('punch_body', {gain:0.8}); } }, cam:(D, k) => cOrbit(D.tp, 9, 1.4, D.ab + Math.PI/2, 60, 1.2)},
-    {d:1.6, enter(D){ const f = D.dir, big = vMesh(new THREE.SphereGeometry(1.6, 18, 12), '#7dffb3', 0.85); big.scale.set(1, 0.9, 2.2); const horn = vMesh(new THREE.ConeGeometry(0.4, 2.2, 8), '#ffffff', 0.9); const from = D.T.core.p.clone().addScaledVector(f, -12).setY(1.4), to = D.T.core.p.clone().addScaledVector(f, 4).setY(1.4);
-        fxAdd({dur:0.9, update(dt, t){ const k = Math.min(1, t/0.4); big.position.lerpVectors(from, to, k); big.rotation.y = Math.atan2(f.x, f.z); horn.position.copy(big.position).addScaledVector(f, 2.6).add(V3(0, 0.6, 0)); horn.quaternion.setFromUnitVectors(V3(0, 1, 0), f); big.material.opacity = 0.85*(1 - Math.max(0, t - 0.5)*2); if(k >= 0.9 && !this.hit){ this.hit = 1; vBig(D.T.parts.torso.p.clone(), '#5dff9b', 7); rxBlast(D, 1, {dir:f, out:20, up:8}); scStamp(D.R.name.toUpperCase(), 'gold'); } }, dispose(){ fxKill(big, horn); }}); ssS('roar', {gain:1}); },
+    {d:1.6, enter(D){ const f = D.dir, big = stShiki('elephant'); big.scale.setScalar(0.85); const from = D.T.core.p.clone().addScaledVector(f, -14).setY(0), to = D.T.core.p.clone().addScaledVector(f, 5).setY(0);
+        const pd = vMesh(new THREE.CircleGeometry(3.2, 28), '#05030a', 0.9, false); pd.rotation.x = -Math.PI/2; pd.position.copy(from).setY(0.03);
+        fxAdd({dur:0.95, update(dt, t){ const k = Math.min(1, t/0.45); big.position.lerpVectors(from, to, k); big.position.y = Math.abs(Math.sin(t*16))*0.35; big.rotation.y = Math.atan2(f.x, f.z); pd.material.opacity = 0.9*(1 - Math.min(1, t*3));
+            if(Math.random() < 0.8) emitParticles(big.position.x + (Math.random() - 0.5)*3, 0.3, big.position.z, 3, {speed:2, up:2, color:'#9a8a6a', size:1, life:0.6, gravity:0});
+            if(k >= 0.9 && !this.hit){ this.hit = 1; vBig(D.T.parts.torso.p.clone(), '#5dff9b', 7); rxBlast(D, 1, {dir:f, out:20, up:8}); scStamp(D.R.name.toUpperCase(), 'gold'); shake = Math.max(shake, 0.5); } }, dispose(){ scene.remove(big); fxKill(pd); }}); ssS('roar', {gain:1}); ssS('rumble', {gain:1}); },
       cam:(D, k) => cOrbit(D.tp, 12 + k*4, 3, D.ab + Math.PI/2 + 0.4, 62, 1.5)},
     {d:1.1, enter(D){ scStamp(null); D.A.ssPose = 'celebrate'; D.B.ssPose = 'crossArms'; }, tick(D){ emitParticles(D.tp.x + (Math.random() - 0.5)*14, 0.5, D.tp.z + (Math.random() - 0.5)*14, 3, {speed:0.5, up:1, color:'#9a8a6a', size:1, life:1.4, gravity:0}); }, cam:(D, k) => cOrbit(D.tp, 15, 6, D.aa + 2.3, 52, 1)},
   ]},
@@ -18998,9 +19024,9 @@ function imClearEntry(D){
 }
 function imShot(m, e, i){
   const A = ssP(e.a), B = e.b != null ? ssP(e.b) : null, act = IM_ACTS[e.act], S = IM_ST[e.act] || IM_ST.rest, lines = imLines(m, e, i);
-  const t0 = 1.3, sched = []; let T = t0; for(const l of lines){ sched.push(T); T += 1.4 + l.t.length/28; }
+  const t0 = 0.6, sched = []; let T = t0; for(const l of lines){ sched.push(T); T += 0.75 + l.t.length/40; }   // v69: halb so lang
   const team = (id) => m.ra.includes(id) ? 'red' : 'blue', neg = act.neg ? '#ff8a96' : act.mixed ? '#ffb43f' : '#9dffcf';
-  return {d:T + 2.8, enter(D){ imClearEntry(D);
+  return {d:T + 1.3, enter(D){ imClearEntry(D);
       D.A = scActor(A, 0, 0, 0, team(e.a)); D.cur.push(D.A); D.B = B ? scActor(B, 2, 0, 0, team(e.b)) : null; if(D.B) D.cur.push(D.B);
       try{ S.build(D, e); }catch(err){ console.warn('Intermission', err); }
       scTitle(act.name.toUpperCase(), `${A.name}${B ? ' & ' + B.name : ''}`.toUpperCase(), act.neg ? '#ff5a4f' : act.mixed ? '#ffb43f' : '#2fc4e0');
@@ -24004,22 +24030,14 @@ imPlan = function(st, m){
         if(ssR(st) < clamp((XP.chIm + (soul ? XP.chImSoul : 0) + ((p.iq ?? 60) - 60)/400)*xpPace(st)*(xpWild(m) ? XP.wcImMul : 1), 0.05, 0.9)){ const u = xpUnlock(st, p, `intermission before #${m.no}: ${IM_ACTS[e.act].name}`); if(u){ e.xu = [u]; st.xpPend.push(Object.assign({}, u, {mid:m.id, mno:m.no, src:'im', act:e.act})); } } } } xpUi(); } }catch(err){ console.warn('Expert IM', err); }
   return out;
 };
-// Intermission-Karte/Übersicht: Freischaltung anzeigen
-const _xpImCard = imCard;
-imCard = function(e, m){ _xpImCard(e, m); const el = document.getElementById('im-card'); if(!e || !el || !(e.xu || []).length) return;
-  for(const u of e.xu){ const d = document.createElement('div'); d.className = 'learn'; d.style.color = '#c9a8ff'; d.innerHTML = `🔥 SOUL FLAME · ${ssEsc(ssP(u.pid).name)}<br>unlocks “${ssEsc(kdLabel(u.id))}” (${u.n}/${xpOrder(ssP(u.pid)).length})`; el.appendChild(d); } };
-const _xpImSum = imSummary;
-imSummary = function(m){ _xpImSum(m); const el = document.getElementById('im-sum'); if(!el) return; const its = el.querySelectorAll('.it');
-  (m.im || []).forEach((e, i) => { if(!(e.xu || []).length || !its[i]) return; for(const u of e.xu){ const d = document.createElement('div'); d.className = 'ln'; d.innerHTML = `🔥 Soul flame: ${ssEsc(ssP(u.pid).name)} unlocks <b>${ssEsc(kdLabel(u.id))}</b>`; its[i].appendChild(d); } }); };
-// Intermission-Dialog: kurzer Moment der Erkenntnis
-const XP_LINES = [[['A', '(Something burns inside me. Quietly. Like a flame that was always there.)']], [['A', '…There. Deep inside.'], ['A', '(A technique that was sleeping. It just opened its eyes.)']],
-  [['A', '(When I close my eyes, I see a light I\'ve never seen before.)']], [['A', 'My soul … is speaking.']]];
+// Intermission: kürzere Dialoge (höchstens zwei Zeilen, bei einem Durchbruch eine Zeile dazu) – keine Hinweise auf Seelenflammen
 const _xpImLines = imLines;
-imLines = function(m, e, i){ const L = _xpImLines(m, e, i); if(!(e.xu || []).length) return L; const v = XP_LINES[(m.id*7 + i*3) % XP_LINES.length];
-  return L.concat(v.map(([w, t]) => ({w:e.xu[0].pid === e.b ? 'B' : w, t}))); };
+imLines = function(m, e, i){ const L = _xpImLines(m, e, i), n = e.learn ? 2 : 0, base = L.slice(0, L.length - n), learn = L.slice(L.length - n);
+  return base.slice(0, 2).concat(learn.slice(-1)); };
 
 /* ---------- Die Enthüllung: Seelenflammen wie in der Gacha, aber nur die freigeschalteten ---------- */
-function scXpReveal(u){
+function scXpReveal(u, o = {}){
+  const XF = o.fast ? 0.55 : 1;
   const st = SS.st, p = st.players[u.pid]; if(!p) return null;
   const f = gcFighter(p), U = xpOf(p).slice(), n = Math.max(1, Math.min(U.length, u.n || U.length)), have = U.slice(0, n);
   if(!have.includes(u.id)){ have[have.length - 1] = u.id; }
@@ -24033,16 +24051,16 @@ function scXpReveal(u){
     setup(D){ scClearActors(); ssArena(false); battle.phase = 'off'; scBallAway(); gcClear(); gcOv(); D.mind = gcMind(); D.A = gcActor(f); scPlace(D.A, 0, 0, 0); D.A.ssPose = 'gcMeditate'; scMood('blue'); },
     cleanup(D){ gcClear(); gcOvOff(); scClearActors(); ssLobbyScreens(); },
     shots:[
-      {d:3.8, noHold:true, enter(D){ gcTop(u.wild ? 'WILDCARD' : 'SOUL', u.src === 'im' ? 'INTERMISSION' : u.wild ? `WILDCARD AWAKENING · MATCH #${u.mno}` : `AFTER MATCH #${u.mno}`, u.wild ? '#ffd23f' : '#b08aff'); scFlash('#ffffff', 0.7, 0.1); ssS('chorus', {gain:0.4}); ssS('heartbeat', {gain:0.5});
+      {d:3.8*XF, noHold:true, enter(D){ gcTop(u.wild ? 'WILDCARD' : 'SOUL', u.src === 'im' ? 'INTERMISSION' : u.wild ? `WILDCARD AWAKENING · MATCH #${u.mno}` : `AFTER MATCH #${u.mno}`, u.wild ? '#ffd23f' : '#b08aff'); scFlash('#ffffff', 0.7, 0.1); ssS('chorus', {gain:0.4}); ssS('heartbeat', {gain:0.5});
           D.fl = FP.map(q => gcFlame(q.x, q.y, q.z)); scKanji('魂');
-          scSub('', `${f.name.split(' ')[0]} carries ${ni === 0 ? 'no flame yet' : ni === 1 ? 'one soul flame' : ni + ' soul flames'} … and something new is stirring.`, '#b08aff'); },
-        tick(D, k, dt, t){ D.fl.forEach((F, i) => { if(t > 0.6 + i*0.4 && F.pop < 1){ if(F.pop === 0){ ssS('whoomp', {gain:0.4}); if(i < ni){ F.light(colOf(order[i])); F.halo.material.opacity = 0.4; } } F.pop = Math.min(1, F.pop + dt*3); } }); ticker(D, dt); },
+          if(!o.fast) scSub('', `${f.name.split(' ')[0]} carries ${ni === 0 ? 'no flame yet' : ni === 1 ? 'one soul flame' : ni + ' soul flames'} … and something new is stirring.`, '#b08aff'); },
+        tick(D, k, dt, t){ D.fl.forEach((F, i) => { if(t > (0.6 + i*0.4)*XF && F.pop < 1){ if(F.pop === 0){ ssS('whoomp', {gain:0.4}); if(i < ni){ F.light(colOf(order[i])); F.halo.material.opacity = 0.4; } } F.pop = Math.min(1, F.pop + dt*3/XF); } }); ticker(D, dt); },
         cam:(D, k) => { const a = 0.45 - k*0.45; return {p:V3(Math.sin(a)*5.4, 1.4 + k*0.5, Math.cos(a)*5.4), l:V3(0, 1.4, 0), fov:56}; }},
-      {d:ult ? 6.4 : 5.6, noHold:true, enter(D){ scKanji(null); scSub(null); gcCard(null); ssS('heartbeat', {gain:0.7}); },
+      {d:(ult ? 6.4 : 5.6)*XF, noHold:true, enter(D){ scKanji(null); scSub(null); gcCard(null); ssS('heartbeat', {gain:0.7}); },
         tick(D, k, dt, t){ const F = D.fl[ni]; if(F){
-            if(!F.lit && t > 0.5 && t < 1.6){ F.g.position.x += (Math.random() - 0.5)*0.03*(t - 0.5); if(Math.random() < 0.25) emitParticles(F.g.position.x, F.g.position.y + 0.3, F.g.position.z, 2, {speed:1.2, up:0.5, color:'#ffffff', size:0.12, life:0.3, gravity:0}); }
-            if(t > 1.0 && !D.c){ D.c = 1; ssS('klack', {gain:0.6}); F.edge.material.opacity = 1; }
-            if(t > (ult ? 2.0 : 1.6) && !F.lit){ F.light(col); F.g.position.copy(FP[ni]); scFlash(col, 0.5, 0, ult ? 0.75 : 0.5); avRing(F.g.position.clone(), col, ult ? 5 : 3, 0.5); fovPunch(ult ? -8 : -4); shake = ult ? 0.3 : 0.1;
+            if(!F.lit && t > 0.5*XF && t < 1.6*XF){ F.g.position.x += (Math.random() - 0.5)*0.03; if(Math.random() < 0.25) emitParticles(F.g.position.x, F.g.position.y + 0.3, F.g.position.z, 2, {speed:1.2, up:0.5, color:'#ffffff', size:0.12, life:0.3, gravity:0}); }
+            if(t > 1.0*XF && !D.c){ D.c = 1; ssS('klack', {gain:0.6}); F.edge.material.opacity = 1; }
+            if(t > (ult ? 2.0 : 1.6)*XF && !F.lit){ F.light(col); F.g.position.copy(FP[ni]); scFlash(col, 0.5, 0, ult ? 0.75 : 0.5); avRing(F.g.position.clone(), col, ult ? 5 : 3, 0.5); fovPunch(ult ? -8 : -4); shake = ult ? 0.3 : 0.1;
               emitParticles(F.g.position.x, F.g.position.y + 0.3, F.g.position.z, ult ? 90 : 45, {speed:ult ? 6 : 4, up:1, color:col, size:0.25, life:0.8, gravity:0, drag:1.5});
               ssS(M.tier >= 4 || ult ? 'fanfare' : 'chime', {gain:0.7}); if(M.tier >= 4 || ult){ ssS('chorus', {gain:0.5}); speedLines(1, 0.8, col); }
               gcCard({col, rar:`${ult ? 'ULTIMATE' : 'NEW TECHNIQUE'} · ${Rr[0]} ${'★'.repeat(M.tier)}`, name:kdLabel(u.id),
@@ -24051,7 +24069,7 @@ function scXpReveal(u){
           ticker(D, dt); },
         cam:(D, k, t) => { const q = FP[ni], lit = D.fl && D.fl[ni] && D.fl[ni].lit, dir = V3(q.x, 0, q.z).normalize(), dd = lit ? 3.6 : 3.0 - k*0.3;
           return {p:V3(q.x + dir.x*dd - dir.z*0.9, q.y + 0.35, q.z + dir.z*dd + dir.x*0.9), l:V3(q.x*0.5, q.y - 0.05, q.z*0.5), fov:lit ? 50 : 46}; }},
-      {d:3.4, noHold:true, enter(D){ gcCard(null); scKanji(null); D.fl.forEach(F => { F.halo.material.opacity = 0.85; });
+      {d:3.4*XF, noHold:true, enter(D){ gcCard(null); scKanji(null); D.fl.forEach(F => { F.halo.material.opacity = 0.85; });
           scTitle(`${order.length} / ${total} SOUL FLAMES`, order.map(id => kdLabel(id)).join(' · ').toUpperCase(), col); ssS('chorus', {gain:0.45}); },
         tick(D, k, dt){ ticker(D, dt); },
         cam:(D, k) => { const a = -0.8 + k*1.6; return {p:V3(Math.sin(a)*4.6, 2.3, Math.cos(a)*4.6), l:V3(0, 1.5, 0), fov:60}; }},
@@ -24066,17 +24084,26 @@ function xpPendingScenes(filter){
 // Angesehene/kinematische Matches: Enthüllungen direkt nach den Ergebnis-Szenen
 const _xpScenesFor = ssScenesFor;
 ssScenesFor = function(m, withMatch, before){ const L = _xpScenesFor(m, withMatch, before); try{ if(xpOn() && SS.cine) L.push(...xpPendingScenes(u => u.mid === m.id && u.src === 'match')); }catch(e){} return L; };
-// Intermission-Freischaltungen direkt im Anschluss an die Intermission
-const _xpScPlay = scPlay;
-scPlay = function(scene, onEnd){
-  if(scene && scene.name === 'intermission' && !scene.xpChained && xpOn() && scene.xpM){
-    scene.xpChained = true; const rev = xpPendingScenes(u => u.mid === scene.xpM.id && u.src === 'im');
-    if(rev.length){ let skippedIm = false; return _xpScPlay(scene, (sk) => { skippedIm = !!sk; scChain(rev, () => onEnd && onEnd(skippedIm)); }); }
-  }
-  return _xpScPlay(scene, onEnd);
-};
+// Intermission: Enthüllung direkt hinter dem Training der jeweiligen Person, kompakter Ablauf (Intro kurz, Direktor-Shot entfällt)
+function xpEmbedShots(u){
+  const R = scXpReveal(u, {fast:true}); if(!R) return [];
+  return R.shots.map((sh, j) => ({d:sh.d, noHold:true,
+    enter(D){ if(j === 0){ imClearEntry(D); const X = D.xpR = {}; R.setup(X); D.xpClean = () => { gcClear(); gcOvOff(); scClearActors(); scTitle(null); scSub(null); scKanji(null); };
+        u.shown = true; try{ ssSave(); xpUi(); }catch(e){} } if(sh.enter) sh.enter(D.xpR); },
+    tick(D, k, dt, t){ if(sh.tick && D.xpR) sh.tick(D.xpR, k, dt, t); },
+    cam(D, k, t){ return D.xpR ? sh.cam(D.xpR, k, t) : {p:V3(0, 3, 6), l:V3(0, 1, 0)}; }}));
+}
+const _xpImClear = imClearEntry;
+imClearEntry = function(D){ try{ scCards(null); }catch(e){} if(D && D.xpClean){ const c = D.xpClean; D.xpClean = null; D.xpR = null; try{ c(); }catch(e){} } return _xpImClear(D); };
 const _xpImScene = imScene;
-imScene = function(m){ const s = _xpImScene(m); s.xpM = m; return s; };
+imScene = function(m){
+  const s = _xpImScene(m), list = m.im || [], sh = s.shots, last = sh[sh.length - 1];
+  sh[0].d = 1.8; last.d = 1.3;
+  const out = [sh[0]];
+  list.forEach((e, i) => { out.push(sh[2 + i]);
+    if(SS.st && SS.st.xp) for(const u of (SS.st.xpPend || []).filter(u => !u.shown && u.src === 'im' && u.mid === m.id && (u.pid === e.a || u.pid === e.b))) out.push(...xpEmbedShots(u)); });
+  out.push(last); s.shots = out; return s;
+};
 
 /* ---------- Turniermenü & Kader ---------- */
 function xpUi(){
@@ -24263,7 +24290,7 @@ function ngJoin(st, m){
 }
 const _ngFinal = twFinalizeMatch;
 twFinalizeMatch = function(st, m){ const T = st.tw, isG = T && T.id === 'guest'; _ngFinal(st, m); if(isG) try{ ngJoin(st, m); }catch(e){ console.warn('New Gen', e); } };
-try{ Object.assign(window.__arena, {ssSimFill, ssSimAdd, simCheck, ngName, ngJoin, SIM}); }catch(e){}
+try{ Object.assign(window.__arena, {imScene:(m) => imScene(m), imPlan:(st, m) => imPlan(st, m), rxImpact:(X) => rxImpact(X), SS_REACTIONS, ssSimFill, ssSimAdd, simCheck, ngName, ngJoin, SIM}); }catch(e){}
 requestAnimationFrame(frame);
 } // startGame
 </script>

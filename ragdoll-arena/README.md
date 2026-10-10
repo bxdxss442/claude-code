@@ -159,3 +159,11 @@ Which building blocks each technique uses was measured automatically (`VAR_USE`)
   - In Expert Mode he arrives with all his techniques.
 - **Expert Mode:** as soon as a team has 5 players, all of its members unlock **every technique slot** they own. Moves gated behind stat thresholds are not forced. This way early qualifiers are no worse off than late ones.
 - **Tested in simulation:** 70+ full tournaments with 16–125 fighters. Every final team had 5 players, no handicap matches occurred, nobody was in two teams, and no simulation was ever stolen.
+
+## Shorter intermissions with integrated soul reveals, Beast Stampede with shikigami (v69)
+
+- **Intermissions about half as long:**
+  - At most two dialogue lines per station, plus one line for a breakthrough. Tighter line timing.
+  - Shorter intro (1.8 s) and closing shot (1.3 s). The director shot in between is gone.
+- **Soul reveal right after the training** of the person concerned, in a fast version (≈ 7 s instead of 13 s). The text announcing new soul flames is gone: in the intermission card, in the overview, in the dialogue, and as a subtitle at the start of the reveal. Reveals from skipped intermissions still collect under “🔥 Soul Reveals”.
+- **Beast Stampede** (chemical reaction): instead of glowing spheres, shikigami of the Ten Shadows break out of shadow pools: Divine Dogs, rabbits, Piercing Ox and Round Deer, with two Nue overhead. They run in formation with leg, hop and wing animations. The finale is Max Elephant trampling through.
