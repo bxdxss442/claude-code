@@ -114,3 +114,18 @@ Which building blocks each technique uses was measured automatically (`VAR_USE`)
   - In simulations a fighter of equal strength wins a 1v2 about 23 % of the time (previously 0 %).
   - Visually there is only a subtle, individual aura (embers, mist, flicker, ripples or motes in a personal color) plus breath clouds in a personal rhythm.
 - **Less clutter:** hit stars are smaller and appear less often on small hits, and Japanese sound words appear at most every 0.32 s and smaller. In 9:16 mode, only the two fighters in the director's focus show their names, the health bars are narrow, and guard bars and AI labels are hidden.
+
+## Broken figures come back whole, Expert Mode (v67)
+
+- **Repairing figures that fell apart:** a figure that broke into pieces (Lego break) and comes back (revival, plot twist, cutscene) is put back together where it lies: rest pose, all joints recreated. Previously it stayed in pieces.
+- **🎓 Expert Mode** (button in the tournament menu, saved with the tournament):
+  - Everyone starts with **one basic technique**, the one with the fewest stars.
+  - Locked techniques do not exist for the AI, and casts of them are refused.
+  - **After every fight**, each participant who has not been eliminated may unlock the next technique. The chance is 34 %, +14 % for a win, plus a little from INT.
+  - Unlocks go in ascending order of stars, with the **ultimate last**.
+  - **Intermissions** can also awaken a technique. CE meditation, energy flow and forbidden training make it more likely.
+  - Every unlock gets the **soul-flame scene from the gacha**. It shows exactly as many flames as are unlocked: the old ones burn in their rarity colours, and the new one appears as a silhouette and is revealed with its card.
+  - The scene plays straight after the result scenes of watched matches, and after the intermission for intermission unlocks.
+  - Reveals from simulated matches collect under **“🔥 Soul Reveals (n)”**.
+  - In simulations, each additional technique adds +4 strength.
+  - The fighter detail view shows 🔥/🔒 for each technique.
