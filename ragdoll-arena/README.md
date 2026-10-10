@@ -128,4 +128,18 @@ Which building blocks each technique uses was measured automatically (`VAR_USE`)
   - The scene plays straight after the result scenes of watched matches, and after the intermission for intermission unlocks.
   - Reveals from simulated matches collect under **“🔥 Soul Reveals (n)”**.
   - In simulations, each additional technique adds +4 strength.
+  - **Pace scales with tournament size:** unlock chances (matches and intermissions) are multiplied by (120 / fighters)^0.55, which is ×1 at 120 and ≈ ×3 at 16 fighters. Simulated full tournaments:
+
+    | Fighters | Matches in the tournament | Own fights until all 4 techniques (median) | Fighters with all 4 at the end |
+    |---|---|---|---|
+    | 16 | ~13 | ~2 | ~85 % |
+    | 43 | ~23 | ~2 | ~75 % |
+    | 120 | ~110 | ~4 | ~60 % |
+
+  - **Wildcard awakening:**
+    - Wildcard matches multiply the chance by 2.2.
+    - Winners of a wildcard match **always** unlock a technique, with a 50 % chance of a **second** one right after.
+    - Losers still get a 20 % chance of a double unlock.
+    - Intermissions before wildcard matches multiply the chance by 1.8.
+    - The reveal shows “WILDCARD AWAKENING” in gold.
   - The fighter detail view shows 🔥/🔒 for each technique.

@@ -23920,7 +23920,7 @@ scRevive = function(r){ if(r && r.legoBroken) legoRepair(r); return _lrRevive(r)
 // Jeder startet mit EINER Basistechnik (die mit den wenigsten Sternen). Nach jedem Kampf besteht die Chance auf eine weitere,
 // ebenso in Intermissions (Seelen-Meditation). Reihenfolge: nach Sternen aufsteigend, das Ultimate zuletzt.
 // Jede neue Technik wird mit der Seelenflammen-Szene aus der Gacha enthüllt – mit genau so vielen Flammen, wie freigeschaltet sind.
-const XP = {chMatch:0.34, chWin:0.14, chIm:0.2, chImSoul:0.22};
+const XP = {chMatch:0.34, chWin:0.14, chIm:0.2, chImSoul:0.22, wcMul:2.2, wcDouble:0.5, wcImMul:1.8};
 const xpOn = () => !!(SS.st && SS.st.xp);
 function xpOrder(p){ const mv = [...(p.moves || [])].filter(Boolean).sort((a, b) => (stMove(a).tier - stMove(b).tier) || (p.moves.indexOf(a) - p.moves.indexOf(b))); if(p.ult) mv.push(p.ult); return mv; }
 function xpOf(p){
@@ -23937,7 +23937,11 @@ function xpUnlock(st, p, why){
   const ult = id === p.ult; ssLog(st, `🔥 ${p.name} unlocks ${ult ? 'the ultimate' : 'a technique'}: ${kdLabel(id)} (${why})`);
   return {pid:p.id, id, n:p.xpU.length, ult};
 }
-function xpChance(p, won){ const iq = p.iq ?? 60; return clamp(XP.chMatch + (won ? XP.chWin : 0) + (iq - 60)/300, 0.12, 0.65); }
+// Tempo nach Turniergröße: bei 120 Kämpfern ×1, bei 16 Kämpfern rund ×3 (wenige Matches pro Kopf → schnellere Freischaltung)
+function xpPace(st){ const n = Math.max(4, (st && st.players ? st.players.length : 120)); return clamp(Math.pow(120/n, 0.55), 0.9, 3); }
+const xpWild = (m) => !!m && (m.kind === 'wc' || m.kind === 'wcd');
+function xpChance(p, won, st, m){ const iq = p.iq ?? 60, k = xpPace(st)*(xpWild(m) ? XP.wcMul : 1);
+  return clamp((XP.chMatch + (won ? XP.chWin : 0) + (iq - 60)/300)*k, 0.12, xpWild(m) ? 0.97 : 0.9); }
 // Einschalten: alle (noch nicht initialisierten) Kämpfer auf ihre Basistechnik setzen
 function xpSet(on){
   const st = SS.st; if(!st) return; st.xp = !!on; st.xpPend = st.xpPend || [];
@@ -23960,7 +23964,10 @@ ssResolve = function(st, m, result, how){
   const res = _xpResolve.apply(this, arguments);
   try{ if(st && st.xp && m && result && !m.xpRolled){ m.xpRolled = true; st.xpPend = st.xpPend || [];
     for(const [ids, side] of [[m.ra || [], 'a'], [m.rb || [], 'b']]) for(const id of ids){ const p = st.players[id]; if(!p || !xpNext(p) || (m.elim || []).includes(id)) continue;
-      if(ssR(st) < xpChance(p, result.side === side)){ const u = xpUnlock(st, p, `after match #${m.no}`); if(u) st.xpPend.push(Object.assign(u, {mid:m.id, mno:m.no, src:'match'})); } } } xpUi(); }catch(e){ console.warn('Expert', e); }
+      const won = result.side === side, wild = xpWild(m);
+      // Wildcard: Gewinner erwachen garantiert, mit Chance auf eine zweite Technik direkt hinterher
+      const n = (wild && won) || ssR(st) < xpChance(p, won, st, m) ? (wild && ssR(st) < (won ? XP.wcDouble : XP.wcDouble*0.4) ? 2 : 1) : 0;
+      for(let k = 0; k < n; k++){ const u = xpUnlock(st, p, wild ? `wildcard · match #${m.no}` : `after match #${m.no}`); if(u) st.xpPend.push(Object.assign(u, {mid:m.id, mno:m.no, src:'match', wild})); } } } xpUi(); }catch(e){ console.warn('Expert', e); }
   return res;
 };
 // Simulierte Matches: wer mehr Techniken freigeschaltet hat, ist spürbar stärker (+4 Stärke je weiterer Technik)
@@ -23978,7 +23985,7 @@ imPlan = function(st, m){
   try{ if(!had && out && st.xp){ st.xpPend = st.xpPend || [];
     for(const e of out){ for(const who of [e.a, e.b]){ if(who == null) continue; const p = st.players[who]; if(!p || !xpNext(p) || (e.xu || []).length) continue;
         const soul = e.act === 'meditate' || e.act === 'cedoll' || e.act === 'forbidden';
-        if(ssR(st) < XP.chIm + (soul ? XP.chImSoul : 0) + ((p.iq ?? 60) - 60)/400){ const u = xpUnlock(st, p, `intermission before #${m.no}: ${IM_ACTS[e.act].name}`); if(u){ e.xu = [u]; st.xpPend.push(Object.assign({}, u, {mid:m.id, mno:m.no, src:'im', act:e.act})); } } } } xpUi(); } }catch(err){ console.warn('Expert IM', err); }
+        if(ssR(st) < clamp((XP.chIm + (soul ? XP.chImSoul : 0) + ((p.iq ?? 60) - 60)/400)*xpPace(st)*(xpWild(m) ? XP.wcImMul : 1), 0.05, 0.9)){ const u = xpUnlock(st, p, `intermission before #${m.no}: ${IM_ACTS[e.act].name}`); if(u){ e.xu = [u]; st.xpPend.push(Object.assign({}, u, {mid:m.id, mno:m.no, src:'im', act:e.act})); } } } } xpUi(); } }catch(err){ console.warn('Expert IM', err); }
   return out;
 };
 // Intermission-Karte/Übersicht: Freischaltung anzeigen
@@ -24010,7 +24017,7 @@ function scXpReveal(u){
     setup(D){ scClearActors(); ssArena(false); battle.phase = 'off'; scBallAway(); gcClear(); gcOv(); D.mind = gcMind(); D.A = gcActor(f); scPlace(D.A, 0, 0, 0); D.A.ssPose = 'gcMeditate'; scMood('blue'); },
     cleanup(D){ gcClear(); gcOvOff(); scClearActors(); ssLobbyScreens(); },
     shots:[
-      {d:3.8, noHold:true, enter(D){ gcTop('SOUL', u.src === 'im' ? 'INTERMISSION' : `AFTER MATCH #${u.mno}`, '#b08aff'); scFlash('#ffffff', 0.7, 0.1); ssS('chorus', {gain:0.4}); ssS('heartbeat', {gain:0.5});
+      {d:3.8, noHold:true, enter(D){ gcTop(u.wild ? 'WILDCARD' : 'SOUL', u.src === 'im' ? 'INTERMISSION' : u.wild ? `WILDCARD AWAKENING · MATCH #${u.mno}` : `AFTER MATCH #${u.mno}`, u.wild ? '#ffd23f' : '#b08aff'); scFlash('#ffffff', 0.7, 0.1); ssS('chorus', {gain:0.4}); ssS('heartbeat', {gain:0.5});
           D.fl = FP.map(q => gcFlame(q.x, q.y, q.z)); scKanji('魂');
           scSub('', `${f.name.split(' ')[0]} carries ${ni === 0 ? 'no flame yet' : ni === 1 ? 'one soul flame' : ni + ' soul flames'} … and something new is stirring.`, '#b08aff'); },
         tick(D, k, dt, t){ D.fl.forEach((F, i) => { if(t > 0.6 + i*0.4 && F.pop < 1){ if(F.pop === 0){ ssS('whoomp', {gain:0.4}); if(i < ni){ F.light(colOf(order[i])); F.halo.material.opacity = 0.4; } } F.pop = Math.min(1, F.pop + dt*3); } }); ticker(D, dt); },
@@ -24077,7 +24084,7 @@ kdOpen = function(id, cmpId){ _xpKd(id, cmpId); try{ if(!xpOn()) return; const p
   h.after(el); }catch(e){} };
 (function(){ const c = document.createElement('style'); c.textContent = `.xp-box{margin:6px 0;padding:6px 8px;border:2px solid #121019;background:#f3edff;font:12px var(--f-body,system-ui);display:flex;flex-wrap:wrap;gap:5px;align-items:center}
 .xp-box b{font-weight:800;margin-right:4px}.xp-t{padding:1px 6px;border:1.5px solid #8a80a8;color:#6c6585;background:#fff}.xp-t.on{border-color:#7a3cff;color:#121019;background:#e4d6ff}`; document.head.appendChild(c); })();
-try{ Object.assign(window.__arena, {scenesFor:(m, w, b) => ssScenesFor(m, w, b), sscState:() => ({i:SSC.cur && SSC.cur.i, t:SSC.cur && +SSC.cur.t.toFixed(2), name:SSC.cur && SSC.cur.scene.name, active:SS.active, paused:ctx.paused, cm:typeof CM !== 'undefined' && CM.paused, hooks:!!(modeHooks.frame)}), ssSimN:(n) => ssSimN(n), cmPlayList, legoBreak:(...a) => legoBreak(...a), legoRepair, xpSet, xpOf, xpOrder, xpUnlock, scXpReveal, xpPendingScenes, XP}); }catch(e){}
+try{ Object.assign(window.__arena, {newTourney:(n) => { SS.count = ssNearestCount(n, Math.min(SS_MAX_PLAYERS, SS_NAMES.length)); ssNewTournament(false); }, xpPace, xpChance, scenesFor:(m, w, b) => ssScenesFor(m, w, b), sscState:() => ({i:SSC.cur && SSC.cur.i, t:SSC.cur && +SSC.cur.t.toFixed(2), name:SSC.cur && SSC.cur.scene.name, active:SS.active, paused:ctx.paused, cm:typeof CM !== 'undefined' && CM.paused, hooks:!!(modeHooks.frame)}), ssSimN:(n) => ssSimN(n), cmPlayList, legoBreak:(...a) => legoBreak(...a), legoRepair, xpSet, xpOf, xpOrder, xpUnlock, scXpReveal, xpPendingScenes, XP}); }catch(e){}
 requestAnimationFrame(frame);
 } // startGame
 </script>
