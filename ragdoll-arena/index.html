@@ -24056,7 +24056,8 @@ function scXpReveal(u, o = {}){
           if(!o.fast) scSub('', `${f.name.split(' ')[0]} carries ${ni === 0 ? 'no flame yet' : ni === 1 ? 'one soul flame' : ni + ' soul flames'} … and something new is stirring.`, '#b08aff'); },
         tick(D, k, dt, t){ D.fl.forEach((F, i) => { if(t > (0.6 + i*0.4)*XF && F.pop < 1){ if(F.pop === 0){ ssS('whoomp', {gain:0.4}); if(i < ni){ F.light(colOf(order[i])); F.halo.material.opacity = 0.4; } } F.pop = Math.min(1, F.pop + dt*3/XF); } }); ticker(D, dt); },
         cam:(D, k) => { const a = 0.45 - k*0.45; return {p:V3(Math.sin(a)*5.4, 1.4 + k*0.5, Math.cos(a)*5.4), l:V3(0, 1.4, 0), fov:56}; }},
-      {d:(ult ? 6.4 : 5.6)*XF, noHold:true, enter(D){ scKanji(null); scSub(null); gcCard(null); ssS('heartbeat', {gain:0.7}); },
+      {d:(ult ? 6.4 : 5.6)*XF + 2.2, noHold:true,   // v70: endet mit Flamme + Erklärung (genug Lesezeit), keine Ergebnis-Anzeige danach
+        enter(D){ scKanji(null); scSub(null); gcCard(null); ssS('heartbeat', {gain:0.7}); },
         tick(D, k, dt, t){ const F = D.fl[ni]; if(F){
             if(!F.lit && t > 0.5*XF && t < 1.6*XF){ F.g.position.x += (Math.random() - 0.5)*0.03; if(Math.random() < 0.25) emitParticles(F.g.position.x, F.g.position.y + 0.3, F.g.position.z, 2, {speed:1.2, up:0.5, color:'#ffffff', size:0.12, life:0.3, gravity:0}); }
             if(t > 1.0*XF && !D.c){ D.c = 1; ssS('klack', {gain:0.6}); F.edge.material.opacity = 1; }
@@ -24069,10 +24070,6 @@ function scXpReveal(u, o = {}){
           ticker(D, dt); },
         cam:(D, k, t) => { const q = FP[ni], lit = D.fl && D.fl[ni] && D.fl[ni].lit, dir = V3(q.x, 0, q.z).normalize(), dd = lit ? 3.6 : 3.0 - k*0.3;
           return {p:V3(q.x + dir.x*dd - dir.z*0.9, q.y + 0.35, q.z + dir.z*dd + dir.x*0.9), l:V3(q.x*0.5, q.y - 0.05, q.z*0.5), fov:lit ? 50 : 46}; }},
-      {d:3.4*XF, noHold:true, enter(D){ gcCard(null); scKanji(null); D.fl.forEach(F => { F.halo.material.opacity = 0.85; });
-          scTitle(`${order.length} / ${total} SOUL FLAMES`, order.map(id => kdLabel(id)).join(' · ').toUpperCase(), col); ssS('chorus', {gain:0.45}); },
-        tick(D, k, dt){ ticker(D, dt); },
-        cam:(D, k) => { const a = -0.8 + k*1.6; return {p:V3(Math.sin(a)*4.6, 2.3, Math.cos(a)*4.6), l:V3(0, 1.5, 0), fov:60}; }},
     ]};
 }
 function xpPendingScenes(filter){
